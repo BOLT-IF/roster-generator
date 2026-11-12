@@ -12,6 +12,7 @@ import {
   normalizeConfig,
   readStorage,
   sanitizePlannerState,
+  splitRosterViolations,
   swapRosterRounds,
   swapRosterSlots,
   swapRosterTeams,
@@ -59,6 +60,8 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
     directoryLoaded && roster && rosterSignature && rosterSignature !== plannerRosterSignature
   );
 
+  const { blocking: blockingViolations, expectedRepeats } = splitRosterViolations(roster, config);
+
   const selectedEditSummary = (() => {
     if (!roster || !selectedRosterTarget) return "";
     if (selectedRosterTarget.mode === "player") {
@@ -99,11 +102,12 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
       return;
     }
 
-    const duplicateViolations = (roster.violations || []).filter((violation) =>
+    // Expected Play Twice repeats are not worth a warning dialog.
+    const duplicateViolations = splitRosterViolations(roster, config).blocking.filter((violation) =>
       violation.startsWith(DUPLICATE_KNOCKOUT_VIOLATION_PREFIX)
     );
     setDuplicateKnockoutViolations(duplicateViolations);
-  }, [config.draw_type, roster]);
+  }, [config.draw_type, config.league_meetings, roster]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isRosterStale) {
@@ -382,6 +386,8 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
     isRosterStale,
     selectedEditSummary,
     duplicateKnockoutViolations,
+    blockingViolations,
+    expectedRepeatCount: expectedRepeats.length,
     canContinueFromPlayers,
     canContinueFromSettings,
     configIssue,

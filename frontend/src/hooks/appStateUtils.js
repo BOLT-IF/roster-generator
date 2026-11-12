@@ -156,6 +156,40 @@ export function getLeagueKnockoutIssue({ drawType, playerCount, pairCount }) {
   return null;
 }
 
+// Split the backend's roster violations into the ones that must block starting a
+// session and the ones that are expected by design.
+//
+// With Play Twice (league_meetings = 2) every pair meets every other pair exactly
+// twice, so the backend's "Duplicate knockout matchup" check always fires once per
+// pair of pairs and no swap can remove it. Those first repeats are expected; a
+// matchup repeated more often than the format allows is still a real violation.
+export function splitRosterViolations(roster, config) {
+  const violations = roster?.violations || [];
+  const allowedRepeats = config?.draw_type === "league_knockout" ? Math.max((config.league_meetings || 1) - 1, 0) : 0;
+  if (allowedRepeats === 0) {
+    return { blocking: violations, expectedRepeats: [] };
+  }
+
+  const repeatsByMatchup = new Map();
+  const blocking = [];
+  const expectedRepeats = [];
+  violations.forEach((violation) => {
+    if (!violation.startsWith(DUPLICATE_KNOCKOUT_VIOLATION_PREFIX)) {
+      blocking.push(violation);
+      return;
+    }
+    const matchup = violation.split(" (rounds")[0];
+    const seen = repeatsByMatchup.get(matchup) || 0;
+    repeatsByMatchup.set(matchup, seen + 1);
+    if (seen < allowedRepeats) {
+      expectedRepeats.push(violation);
+    } else {
+      blocking.push(violation);
+    }
+  });
+  return { blocking, expectedRepeats };
+}
+
 // Change the court count and keep court_numbers in sync with it.
 export function withCourtCount(config, courtCount) {
   const existing = config.court_numbers || [];

@@ -34,8 +34,10 @@ test("reloading the planner preserves selections, pairs, limits and roster valid
   }
   await page.getByText("Advanced Settings").click();
   await page.locator("select").selectOption(players[2].shortName);
+  // A generous limit keeps the generated roster free of constraint violations.
+  await page.locator('input[type="number"][max="20"]').last().fill("20");
   await page.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(page.getByText(`${players[2].shortName}: max 2`)).toBeVisible();
+  await expect(page.getByText(`${players[2].shortName}: max 20`)).toBeVisible();
 
   await page.getByRole("button", { name: "Next: Review" }).click();
   await page.getByRole("button", { name: "Generate Roster" }).click();
@@ -50,7 +52,7 @@ test("reloading the planner preserves selections, pairs, limits and roster valid
   // Limits survive the reload.
   await page.getByRole("button", { name: "Next: Settings" }).click();
   await page.getByText("Advanced Settings").click();
-  await expect(page.getByText(`${players[2].shortName}: max 2`)).toBeVisible();
+  await expect(page.getByText(`${players[2].shortName}: max 20`)).toBeVisible();
 
   // The saved roster is still considered valid, not stale.
   await page.getByRole("button", { name: "Next: Review" }).click();

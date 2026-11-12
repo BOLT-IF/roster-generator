@@ -173,6 +173,8 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
     selectedRosterTarget,
     selectedEditSummary,
     duplicateKnockoutViolations,
+    blockingViolations,
+    expectedRepeatCount,
     clearRosterSelection,
     dismissDuplicateKnockoutViolations,
     rosterEditLoading,
@@ -331,6 +333,14 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                       {configIssue}
                     </div>
                   ) : null}
+                  {roster && !isRosterStale && blockingViolations.length > 0 ? (
+                    <div role="alert" className="rounded-xl border border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                      <p className="font-semibold">Resolve the constraint violations to start</p>
+                      <p className="mt-1">
+                        Resolve the constraint violations listed under the roster by swapping players, or regenerate, before starting the session.
+                      </p>
+                    </div>
+                  ) : null}
                   {isRosterStale ? (
                     <div className={`rounded-xl border px-4 py-3 text-sm ${
                       roster ? "border-amber-300 bg-amber-50 text-amber-800" : "border-amber-200 bg-amber-50 text-amber-800"
@@ -384,7 +394,7 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                     <button
                       type="button"
                       onClick={onLockRoster}
-                      disabled={!roster || isRosterStale || sessionLoading}
+                      disabled={!roster || isRosterStale || sessionLoading || blockingViolations.length > 0}
                       className="inline-flex min-h-11 items-center justify-center rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
                     >
                       {sessionLoading ? "Creating Session..." : isRosterStale ? "Regenerate To Start" : "Start Session"}
@@ -409,7 +419,8 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
 
             {roster ? (
               <RosterTable
-                data={roster}
+                data={{ ...roster, violations: blockingViolations }}
+                expectedRepeatCount={expectedRepeatCount}
                 fixedPairs={fixedPairs}
                 editable={!isRosterStale}
                 editMode={selectedRosterTarget?.mode || null}
