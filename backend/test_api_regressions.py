@@ -456,5 +456,114 @@ class RenameSoftDeletedConflictTests(unittest.TestCase):
         self.assertNotIn(ghost_full, names)
 
 
+class ExactPairRestoreTests(unittest.TestCase):
+    """M-17: creating a player must not hijack a soft-deleted player's identity.
+
+    The restore-on-create path matched soft-deleted players by ANY name
+    (including old aliases), so a brand-new person whose short name equalled
+    a deleted player's old alias silently became that player: same player_id,
+    inherited aliases, and history linkage.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _deleted_player_with_alias(self, tag):
+        original_full = f"Restore Exact {tag}"
+        original_short = f"REX{tag}"
+        created = self.client.post("/api/players", json={"full_name": original_full, "short_name": original_short})
+        self.assertEqual(created.status_code, 201, created.text)
+        player_id = created.json()["player_id"]
+
+        renamed = self.client.patch(
+            f"/api/players/{player_id}",
+            json={"full_name": f"Renamed Exact {tag}", "short_name": f"RNX{tag}"},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+
+        deleted = self.client.post(
+            f"/api/players/{player_id}/delete",
+            json={"admin_token": "thisismytoken", "delete_history": False},
+        )
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+        return player_id, original_full, original_short
+
+    def test_alias_only_match_does_not_hijack_identity(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        player_id, original_full, original_short = self._deleted_player_with_alias(tag)
+
+        other = self.client.post(
+            "/api/players",
+            json={"full_name": f"Different Person {tag}", "short_name": original_short},
+        )
+        self.assertEqual(
+            other.status_code,
+            409,
+            f"alias-held short name must conflict explicitly, got {other.status_code}: {other.text}",
+        )
+
+    def test_recreate_by_current_full_name_with_fresh_short_restores(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        full_name = f"Plain Deleted {tag}"
+        created = self.client.post("/api/players", json={"full_name": full_name, "short_name": f"PD{tag}"})
+        self.assertEqual(created.status_code, 201, created.text)
+        player_id = created.json()["player_id"]
+
+        deleted = self.client.post(
+            f"/api/players/{player_id}/delete",
+            json={"admin_token": "thisismytoken", "delete_history": False},
+        )
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+
+        restored = self.client.post(
+            "/api/players",
+            json={"full_name": full_name, "short_name": f"FRESH{tag}"},
+        )
+        self.assertEqual(restored.status_code, 201, restored.text)
+        self.assertEqual(restored.json()["player_id"], player_id)
+        self.assertEqual(restored.json()["short_name"], f"FRESH{tag}")
+        self.assertIn(f"PD{tag}", restored.json()["aliases"])
+
+    def test_exact_current_pair_still_restores(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        player_id, _, _ = self._deleted_player_with_alias(tag)
+
+        restored = self.client.post(
+            "/api/players",
+            json={"full_name": f"Renamed Exact {tag}", "short_name": f"RNX{tag}"},
+        )
+        self.assertEqual(restored.status_code, 201, restored.text)
+        self.assertEqual(restored.json()["player_id"], player_id)
+        self.assertIsNotNone(restored.json().get("aliases"))
+
+    def test_same_full_name_with_different_short_conflicts(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        _, original_full, _ = self._deleted_player_with_alias(tag)
+
+        other = self.client.post(
+            "/api/players",
+            json={"full_name": original_full, "short_name": f"NEW{tag}"},
+        )
+        self.assertEqual(
+            other.status_code,
+            409,
+            f"full name held by a deleted player must conflict explicitly, got {other.status_code}: {other.text}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
