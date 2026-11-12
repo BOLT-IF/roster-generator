@@ -1,12 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { createPlayer } from "./helpers/session";
 
-test("planner steps can be clicked to jump between stages", async ({ page, request }) => {
+test("planner steps can be clicked to jump between stages", async ({ page, request }, testInfo) => {
+  const suffix = testInfo.project.name;
   const players = [
-    { fullName: "Stepper Alpha", shortName: "SA1" },
-    { fullName: "Stepper Bravo", shortName: "SB1" },
-    { fullName: "Stepper Charlie", shortName: "SC1" },
-    { fullName: "Stepper Delta", shortName: "SD1" },
+    { fullName: `Stepper Alpha ${suffix}`, shortName: `SA1${suffix}` },
+    { fullName: `Stepper Bravo ${suffix}`, shortName: `SB1${suffix}` },
+    { fullName: `Stepper Charlie ${suffix}`, shortName: `SC1${suffix}` },
+    { fullName: `Stepper Delta ${suffix}`, shortName: `SD1${suffix}` },
   ];
 
   for (const player of players) {

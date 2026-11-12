@@ -1,7 +1,8 @@
-fastapi
-uvicorn[standard]
-gunicorn
-sqlalchemy
-psycopg[binary]
-redis
-python-dotenv
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+gunicorn==26.2.0
+sqlalchemy==2.0.54
+psycopg[binary]==3.3.6
+redis==8.1.0
+python-dotenv==1.2.3
+httpx==0.28.1
