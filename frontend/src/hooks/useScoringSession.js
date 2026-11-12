@@ -17,6 +17,7 @@ import {
   mergePendingScoreEdits,
   normalizeSession,
   readStorage,
+  removeStorage,
   waitForNextPaint,
   writeStorage,
 } from "./appStateUtils";
@@ -37,7 +38,14 @@ export default function useScoringSession({
   const lastLocalEditAtRef = useRef(0);
   const previousNonScoringPathRef = useRef(ROUTE_PATHS.planner);
 
-  const [currentSession, setCurrentSession] = useState(normalizeSession(savedSession));
+  const [currentSession, setCurrentSession] = useState(() => {
+    try {
+      return normalizeSession(savedSession);
+    } catch {
+      // A structurally invalid persisted session must not crash the app.
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("Syncing shared session...");
   const [pendingRoundAction, setPendingRoundAction] = useState(null);
@@ -46,8 +54,8 @@ export default function useScoringSession({
   useEffect(() => {
     if (currentSession) {
       writeStorage(SESSION_STORAGE_KEY, currentSession);
-    } else if (typeof window !== "undefined") {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    } else {
+      removeStorage(SESSION_STORAGE_KEY);
     }
   }, [currentSession]);
 

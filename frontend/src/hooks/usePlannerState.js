@@ -10,6 +10,7 @@ import {
   getRosterRevalidatePayload,
   normalizeConfig,
   readStorage,
+  sanitizePlannerState,
   swapRosterRounds,
   swapRosterSlots,
   swapRosterTeams,
@@ -17,7 +18,7 @@ import {
 } from "./appStateUtils";
 
 export default function usePlannerState({ directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
-  const plannerState = useRef(readStorage(PLANNER_STORAGE_KEY, null)).current;
+  const plannerState = useRef(sanitizePlannerState(readStorage(PLANNER_STORAGE_KEY, null))).current;
   const reviewStepRef = useRef(null);
 
   const [selectedPlayerIds, setSelectedPlayerIds] = useState(plannerState?.selectedPlayerIds || []);

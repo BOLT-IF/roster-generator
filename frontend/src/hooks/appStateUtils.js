@@ -38,20 +38,89 @@ export const ROUTE_PATHS = {
   playerStats: "/stats",
 };
 
-export function readStorage(key, fallback) {
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasSameShapeAsFallback(value, fallback) {
+  if (Array.isArray(fallback)) return Array.isArray(value);
+  if (isPlainObject(fallback)) return isPlainObject(value);
+  if (fallback === null || fallback === undefined) return isPlainObject(value);
+  return typeof value === typeof fallback;
+}
+
+// Safe read: never throws (storage disabled, malformed JSON) and never returns a
+// value whose type differs from the fallback (e.g. a stored "null" or "123").
+// An optional `isValid(value)` can reject further.
+export function readStorage(key, fallback, isValid = null) {
   if (typeof window === "undefined") return fallback;
 
   try {
     const rawValue = window.localStorage.getItem(key);
-    return rawValue ? JSON.parse(rawValue) : fallback;
+    if (!rawValue) return fallback;
+    const parsed = JSON.parse(rawValue);
+    if (!hasSameShapeAsFallback(parsed, fallback)) return fallback;
+    if (isValid && !isValid(parsed)) return fallback;
+    return parsed;
   } catch {
     return fallback;
   }
 }
 
+// Safe write: quota errors / disabled storage must not crash the render tree.
 export function writeStorage(key, value) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+export function removeStorage(key) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+// Coerce whatever was persisted for the planner into a structurally safe shape.
+export function sanitizePlannerState(raw) {
+  if (!isPlainObject(raw)) return null;
+
+  const stringArray = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
+  const pairArray = (value) =>
+    Array.isArray(value)
+      ? value.filter(
+          (pair) => Array.isArray(pair) && pair.length === 2 && pair.every((item) => typeof item === "string")
+        )
+      : [];
+
+  const config = isPlainObject(raw.config) ? { ...raw.config } : {};
+  if (!isPlainObject(config.limits)) delete config.limits;
+  if (!Array.isArray(config.court_numbers)) delete config.court_numbers;
+
+  const rosterIsValid =
+    isPlainObject(raw.roster) &&
+    Array.isArray(raw.roster.rounds) &&
+    raw.roster.rounds.every((round) => isPlainObject(round) && Array.isArray(round.courts));
+  const baselineIsValid =
+    isPlainObject(raw.generatedRosterBaseline) && Array.isArray(raw.generatedRosterBaseline.rounds);
+
+  return {
+    selectedPlayerIds: stringArray(raw.selectedPlayerIds),
+    fixedPairIds: pairArray(raw.fixedPairIds),
+    config,
+    roster: rosterIsValid ? raw.roster : null,
+    generatedRosterBaseline: rosterIsValid && baselineIsValid ? raw.generatedRosterBaseline : null,
+    rosterSignature: rosterIsValid && typeof raw.rosterSignature === "string" ? raw.rosterSignature : null,
+    hasManualRosterEdits: rosterIsValid && Boolean(raw.hasManualRosterEdits),
+    // Legacy (pre-directory) fields, only used for migration.
+    players: Array.isArray(raw.players) ? raw.players : undefined,
+    fixedPairs: Array.isArray(raw.fixedPairs) ? raw.fixedPairs : undefined,
+  };
 }
 
 export function createSessionName() {
