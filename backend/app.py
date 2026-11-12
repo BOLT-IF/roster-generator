@@ -2512,6 +2512,16 @@ def start_round(session_id: str, req: RoundStartRequest, edit_token: str | None 
         if req.stage != "knockout":
             raise HTTPException(status_code=400, detail="Invalid stage")
 
+        if payload.get("draw_config", {}).get("draw_type") != "league_knockout":
+            raise HTTPException(
+                status_code=409,
+                detail="Knockout rounds are only available for league + knockout sessions",
+            )
+        league_records, _ = _get_stage_progress(db, session_id, "league")
+        total_league_rounds = len(payload.get("roster", {}).get("rounds", []))
+        if len(league_records) < total_league_rounds or not all(item.ended for item in league_records):
+            raise HTTPException(status_code=409, detail="Finish all league rounds before starting the knockout")
+
         current_round = _get_stage_progress(db, session_id, "knockout")[1]
         if req.round_index != current_round + 1:
             raise HTTPException(status_code=409, detail="Round must be started in sequence")
@@ -2548,6 +2558,16 @@ def end_round(session_id: str, req: RoundEndRequest, edit_token: str | None = No
 
         if req.stage != "knockout":
             raise HTTPException(status_code=400, detail="Invalid stage")
+
+        if payload.get("draw_config", {}).get("draw_type") != "league_knockout":
+            raise HTTPException(
+                status_code=409,
+                detail="Knockout rounds are only available for league + knockout sessions",
+            )
+        league_records, _ = _get_stage_progress(db, session_id, "league")
+        total_league_rounds = len(payload.get("roster", {}).get("rounds", []))
+        if len(league_records) < total_league_rounds or not all(item.ended for item in league_records):
+            raise HTTPException(status_code=409, detail="Finish all league rounds before starting the knockout")
 
         round_records, active_round = _get_stage_progress(db, session_id, "knockout")
         round_record = next((item for item in round_records if item.round_index == req.round_index), None)
