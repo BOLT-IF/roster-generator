@@ -1743,6 +1743,8 @@ def _validate_score_target(db, session_id: str, payload: dict, stage: str, round
     round_record = db.get(SessionRoundRecord, (session_id, stage, round_index))
     if round_record and round_record.ended:
         raise HTTPException(status_code=409, detail="Round is locked after being ended")
+    if not round_record or not round_record.started:
+        raise HTTPException(status_code=409, detail="Round must be started before scores can be entered")
 
 
 def _apply_score_update(db, session_id: str, payload: dict, req: ScoreUpdateRequest):
@@ -2540,8 +2542,8 @@ def end_round(session_id: str, req: RoundEndRequest, edit_token: str | None = No
         if req.stage == "league":
             round_records, active_round = _get_stage_progress(db, session_id, "league")
             round_record = next((item for item in round_records if item.round_index == req.round_index), None)
-            if req.round_index < 0 or req.round_index > active_round or not round_record or not round_record.started:
-                raise HTTPException(status_code=409, detail="Round must be started before it can be ended")
+            if req.round_index != active_round or not round_record or not round_record.started:
+                raise HTTPException(status_code=409, detail="Only the active round can be ended")
             if round_record.ended:
                 raise HTTPException(status_code=409, detail="Round has already been ended")
 
@@ -2571,8 +2573,8 @@ def end_round(session_id: str, req: RoundEndRequest, edit_token: str | None = No
 
         round_records, active_round = _get_stage_progress(db, session_id, "knockout")
         round_record = next((item for item in round_records if item.round_index == req.round_index), None)
-        if req.round_index < 0 or req.round_index > active_round or not round_record or not round_record.started:
-            raise HTTPException(status_code=409, detail="Round must be started before it can be ended")
+        if req.round_index != active_round or not round_record or not round_record.started:
+            raise HTTPException(status_code=409, detail="Only the active round can be ended")
         if round_record.ended:
             raise HTTPException(status_code=409, detail="Round has already been ended")
 
