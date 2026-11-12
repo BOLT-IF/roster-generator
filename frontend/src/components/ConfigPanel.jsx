@@ -190,7 +190,13 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
   function addLimit(e) {
     e.preventDefault();
     if (!limitPlayer) return;
-    update("limits", { ...config.limits, [limitPlayer]: limitValue });
+    // Enter submits the form without a blur, so the committed `limitValue` can be
+    // stale: resolve the value from what is actually typed in the field.
+    const parsedValue = Number.parseInt(limitValueDraft, 10);
+    const nextValue = Number.isNaN(parsedValue) ? limitValue : Math.min(20, Math.max(1, parsedValue));
+    setLimitValue(nextValue);
+    setLimitValueDraft(String(nextValue));
+    update("limits", { ...config.limits, [limitPlayer]: nextValue });
     setLimitPlayer("");
   }
 
@@ -516,7 +522,7 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
               Consecutive Game Limits
             </p>
-            <form onSubmit={addLimit} className="mb-3 flex flex-col gap-2 sm:flex-row">
+            <form onSubmit={addLimit} noValidate className="mb-3 flex flex-col gap-2 sm:flex-row">
               <select
                 value={limitPlayer}
                 onChange={(e) => setLimitPlayer(e.target.value)}
