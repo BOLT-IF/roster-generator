@@ -2,13 +2,15 @@ import { expect, test } from "@playwright/test";
 import { navigateToSection } from "./helpers/navigation";
 import { createSharedSession, generateRoster } from "./helpers/session";
 
-test("player directory imports names from existing sessions", async ({ page, request }) => {
+test("player directory imports names from existing sessions", async ({ page, request }, testInfo) => {
+  const suffix = testInfo.project.name;
+  const legacyNames = [`Legacy One ${suffix}`, `Legacy Two ${suffix}`, `Legacy Three ${suffix}`, `Legacy Four ${suffix}`];
   const roster = await generateRoster(request, {
-    players: ["Legacy One", "Legacy Two", "Legacy Three", "Legacy Four"],
+    players: legacyNames,
   });
 
   await createSharedSession(request, {
-    name: "Legacy Import Session",
+    name: `Legacy Import Session ${suffix}`,
     roster,
     drawConfig: {
       draw_type: "round_robin",
@@ -21,19 +23,20 @@ test("player directory imports names from existing sessions", async ({ page, req
   await navigateToSection(page, "Players");
 
   const directorySection = page.locator("section").filter({ has: page.getByRole("heading", { name: "Registered players" }) });
-  const legacyOneCard = directorySection.locator("div.rounded-2xl.border.border-gray-200.bg-gray-50").filter({ hasText: "Legacy One" }).first();
-  const legacyTwoCard = directorySection.locator("div.rounded-2xl.border.border-gray-200.bg-gray-50").filter({ hasText: "Legacy Two" }).first();
+  const legacyOneCard = directorySection.locator("div.rounded-2xl.border.border-gray-200.bg-gray-50").filter({ hasText: legacyNames[0] }).first();
+  const legacyTwoCard = directorySection.locator("div.rounded-2xl.border.border-gray-200.bg-gray-50").filter({ hasText: legacyNames[1] }).first();
   await legacyOneCard.scrollIntoViewIfNeeded();
-  await expect(legacyOneCard.getByText("Legacy One", { exact: true }).first()).toBeVisible();
-  await expect(legacyTwoCard.getByText("Legacy Two", { exact: true }).first()).toBeVisible();
+  await expect(legacyOneCard.getByText(legacyNames[0], { exact: true }).first()).toBeVisible();
+  await expect(legacyTwoCard.getByText(legacyNames[1], { exact: true }).first()).toBeVisible();
 });
 
-test("players can be created, selected from the planner directory, and used to start a protected session", async ({ page }) => {
+test("players can be created, selected from the planner directory, and used to start a protected session", async ({ page }, testInfo) => {
+  const suffix = testInfo.project.name;
   const players = [
-    { fullName: "Player Alpha", shortName: "PA1" },
-    { fullName: "Player Bravo", shortName: "PB1" },
-    { fullName: "Player Charlie", shortName: "PC1" },
-    { fullName: "Player Delta", shortName: "PD1" },
+    { fullName: `Player Alpha ${suffix}`, shortName: `PA1${suffix}` },
+    { fullName: `Player Bravo ${suffix}`, shortName: `PB1${suffix}` },
+    { fullName: `Player Charlie ${suffix}`, shortName: `PC1${suffix}` },
+    { fullName: `Player Delta ${suffix}`, shortName: `PD1${suffix}` },
   ];
 
   await page.goto("/");
@@ -66,7 +69,7 @@ test("players can be created, selected from the planner directory, and used to s
   await page.getByRole("button", { name: "Generate Roster" }).click();
 
   await expect(page.getByRole("heading", { name: "Roster" })).toBeVisible();
-  await expect(page.locator("main")).toContainText("PA1");
+  await expect(page.locator("main")).toContainText(`PA1${suffix}`);
 
   await page.getByRole("button", { name: "Start Session" }).click();
   const organizerDialog = page.locator("div.fixed.inset-0").filter({ hasText: "Enter organizer token to start a session" });

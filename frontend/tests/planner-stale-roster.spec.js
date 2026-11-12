@@ -1,13 +1,14 @@
 import { expect, test } from "@playwright/test";
 import { createPlayer } from "./helpers/session";
 
-test("changing planner inputs marks the roster stale until it is regenerated", async ({ page, request }) => {
+test("changing planner inputs marks the roster stale until it is regenerated", async ({ page, request }, testInfo) => {
+  const suffix = testInfo.project.name;
   const players = [
-    { fullName: "Stale Alpha", shortName: "TA1" },
-    { fullName: "Stale Bravo", shortName: "TB1" },
-    { fullName: "Stale Charlie", shortName: "TC1" },
-    { fullName: "Stale Delta", shortName: "TD1" },
-    { fullName: "Stale Echo", shortName: "TE1" },
+    { fullName: `Stale Alpha ${suffix}`, shortName: `TA1${suffix}` },
+    { fullName: `Stale Bravo ${suffix}`, shortName: `TB1${suffix}` },
+    { fullName: `Stale Charlie ${suffix}`, shortName: `TC1${suffix}` },
+    { fullName: `Stale Delta ${suffix}`, shortName: `TD1${suffix}` },
+    { fullName: `Stale Echo ${suffix}`, shortName: `TE1${suffix}` },
   ];
 
   for (const player of players) {

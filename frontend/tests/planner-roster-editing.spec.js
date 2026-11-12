@@ -41,13 +41,14 @@ async function clickMobileTeamCard(teamCard) {
   await teamCard.getByRole("button", { name: /^Swap team / }).click({ position: { x: 12, y: 12 } });
 }
 
-test("planner uses selection-first player, team, and round swaps", async ({ page, request }) => {
+test("planner uses selection-first player, team, and round swaps", async ({ page, request }, testInfo) => {
+  const suffix = testInfo.project.name;
   const players = [
-    { fullName: "Swap Alpha", shortName: "SWA" },
-    { fullName: "Swap Bravo", shortName: "SWB" },
-    { fullName: "Swap Charlie", shortName: "SWC" },
-    { fullName: "Swap Delta", shortName: "SWD" },
-    { fullName: "Swap Echo", shortName: "SWE" },
+    { fullName: `Swap Alpha ${suffix}`, shortName: `SWA${suffix}` },
+    { fullName: `Swap Bravo ${suffix}`, shortName: `SWB${suffix}` },
+    { fullName: `Swap Charlie ${suffix}`, shortName: `SWC${suffix}` },
+    { fullName: `Swap Delta ${suffix}`, shortName: `SWD${suffix}` },
+    { fullName: `Swap Echo ${suffix}`, shortName: `SWE${suffix}` },
   ];
 
   for (const player of players) {
@@ -106,8 +107,8 @@ test("planner uses selection-first player, team, and round swaps", async ({ page
     await firstRound.getByRole("button", { name: "Swap", exact: true }).click();
     await expect(page.getByText(/Selected Round 1\./).first()).toBeVisible();
     await secondRound.locator("summary").click();
+    await expect.poll(async () => getMobileRoundSnapshot(page.locator("details").nth(0))).toEqual(secondRoundBeforeRoundSwap);
     const firstRoundAfterRoundSwap = await getMobileRoundSnapshot(page.locator("details").nth(0));
-    expect(firstRoundAfterRoundSwap).toEqual(secondRoundBeforeRoundSwap);
     expect(firstRoundAfterRoundSwap).not.toEqual(firstRoundBeforeRoundSwap);
 
     page.once("dialog", (dialog) => dialog.accept());
@@ -144,9 +145,11 @@ test("planner uses selection-first player, team, and round swaps", async ({ page
   await roundButtons.nth(0).click();
   await expect(page.getByText(/Selected Round 1\./).first()).toBeVisible();
   await roundButtons.nth(1).click();
+  await expect.poll(async () => {
+    const snapshot = await getRoundSnapshot(page.locator("table tbody tr").nth(0));
+    return JSON.stringify([snapshot.rowBody, snapshot.restText]);
+  }).toBe(JSON.stringify([secondRowBeforeRoundSwap.rowBody, secondRowBeforeRoundSwap.restText]));
   const firstRowAfterRoundSwap = await getRoundSnapshot(page.locator("table tbody tr").nth(0));
-  expect(firstRowAfterRoundSwap.rowBody).toEqual(secondRowBeforeRoundSwap.rowBody);
-  expect(firstRowAfterRoundSwap.restText).toBe(secondRowBeforeRoundSwap.restText);
   expect(firstRowAfterRoundSwap.rowBody).not.toEqual(firstRowBeforeRoundSwap.rowBody);
 
   page.once("dialog", (dialog) => dialog.accept());

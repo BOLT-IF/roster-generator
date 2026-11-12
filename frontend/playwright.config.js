@@ -17,13 +17,13 @@ export default defineConfig({
     : [
         {
           command:
-            "rm -f /tmp/badminton-roster-rename-e2e.db && PLAYWRIGHT_TEST_MODE=1 DATABASE_URL=sqlite:////tmp/badminton-roster-rename-e2e.db ../backend/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8010",
+            "rm -f /tmp/badminton-roster-rename-e2e.db && PLAYWRIGHT_TEST_MODE=1 DATABASE_URL=sqlite:////tmp/badminton-roster-rename-e2e.db ADMIN_RECOVERY_TOKEN=thisismytoken CACHE_ENABLED=false ../backend/venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8010",
           cwd: "../backend",
           url: `${apiBaseURL}/docs`,
           reuseExistingServer: false,
         },
         {
-          command: `VITE_API_URL=${apiBaseURL} npm run dev -- --host 127.0.0.1 --port 4174`,
+          command: `VITE_API_URL=${apiBaseURL} npm run build && npx vite preview --host 127.0.0.1 --port 4174 --strictPort`,
           cwd: ".",
           url: frontendBaseURL,
           reuseExistingServer: false,
