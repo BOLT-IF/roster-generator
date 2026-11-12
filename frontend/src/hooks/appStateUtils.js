@@ -137,6 +137,35 @@ export function normalizeConfig(config) {
   return { ...DEFAULT_CONFIG, ...config };
 }
 
+// League + Knockout (fixed-pair schedule) needs every selected player in exactly
+// one fixed pair, at least two pairs, and exactly pairs // 2 courts. The backend
+// rejects anything else only at Generate time with a raw error, so the planner
+// checks the same rules up front.
+export function getLeagueKnockoutCourts(pairCount) {
+  return Math.floor(pairCount / 2);
+}
+
+export function getLeagueKnockoutIssue({ drawType, playerCount, pairCount }) {
+  if (drawType !== "league_knockout") return null;
+  if (pairCount < 2) {
+    return "League + Knockout needs at least 2 fixed pairs. Pair players up in step 1 or switch to Round Robin.";
+  }
+  if (pairCount * 2 !== playerCount) {
+    return `League + Knockout: every selected player must be in a fixed pair (${playerCount} players, ${pairCount} pairs). Pair everyone up in step 1 or switch to Round Robin.`;
+  }
+  return null;
+}
+
+// Change the court count and keep court_numbers in sync with it.
+export function withCourtCount(config, courtCount) {
+  const existing = config.court_numbers || [];
+  const courtNumbers = [...existing.slice(0, courtCount)];
+  for (let index = courtNumbers.length; index < courtCount; index += 1) {
+    courtNumbers.push(String(index + 1));
+  }
+  return { ...config, num_courts: courtCount, court_numbers: courtNumbers };
+}
+
 export function getPlannerRosterSignature(selectedPlayerIds, fixedPairIds, config, directoryPlayers) {
   const playersById = new Map(directoryPlayers.map((player) => [player.playerId, player]));
   const selectedPlayers = selectedPlayerIds

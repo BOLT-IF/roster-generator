@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getLeagueKnockoutCourts, getLeagueKnockoutIssue, withCourtCount } from "../hooks/appStateUtils";
 
 const DRAW_FORMATS = [
   {
@@ -250,6 +251,31 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
   const courtNumbers = config.court_numbers || [];
   const derivedLeagueRounds = getDerivedLeagueRounds();
   const derivedPairGames = getDerivedPairGames();
+  const leagueKnockoutIssue = getLeagueKnockoutIssue({
+    drawType: config.draw_type,
+    playerCount: players.length,
+    pairCount: fixedPairs.length,
+  });
+  const leagueKnockoutCourts = getLeagueKnockoutCourts(fixedPairs.length);
+
+  // League + Knockout plays pairs / 2 matches per round, so courts are not a free
+  // choice: keep them in step with the pair count (and when the draw type changes).
+  useEffect(() => {
+    if (config.draw_type !== "league_knockout") return;
+    if (leagueKnockoutCourts >= 1 && config.num_courts !== leagueKnockoutCourts) {
+      setConfig((prev) => withCourtCount(prev, leagueKnockoutCourts));
+    }
+  }, [config.draw_type, config.num_courts, leagueKnockoutCourts, setConfig]);
+
+  // Round Robin: never keep more courts than the selected players can fill
+  // (4 players per court); the backend rejects that at Generate time.
+  const maxPlayableCourts = Math.floor(players.length / 4);
+  useEffect(() => {
+    if (config.draw_type === "league_knockout") return;
+    if (maxPlayableCourts >= 1 && config.num_courts > maxPlayableCourts) {
+      setConfig((prev) => withCourtCount(prev, maxPlayableCourts));
+    }
+  }, [config.draw_type, config.num_courts, maxPlayableCourts, setConfig]);
 
   useEffect(() => {
     if (config.draw_type !== "league_knockout") return;
@@ -305,6 +331,17 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
           <span className="font-medium text-gray-800">Preview:</span> {formatPreview()}
         </div>
       </div>
+
+      {config.draw_type === "league_knockout" && leagueKnockoutIssue ? (
+        <div role="alert" className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {leagueKnockoutIssue}
+        </div>
+      ) : null}
+      {config.draw_type === "league_knockout" && !leagueKnockoutIssue ? (
+        <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          League + Knockout uses {leagueKnockoutCourts} court{leagueKnockoutCourts === 1 ? "" : "s"} for {fixedPairs.length} fixed pairs (one match per court each round).
+        </div>
+      ) : null}
 
       {config.draw_type === "league_knockout" && (
         <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">

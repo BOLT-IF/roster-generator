@@ -160,6 +160,7 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
     fixedPairs,
     canContinueFromPlayers,
     canContinueFromSettings,
+    configIssue,
     loading,
     roster,
     generateError,
@@ -325,6 +326,11 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                       <p className="mt-1">{plannerError}</p>
                     </div>
                   ) : null}
+                  {configIssue ? (
+                    <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                      {configIssue}
+                    </div>
+                  ) : null}
                   {isRosterStale ? (
                     <div className={`rounded-xl border px-4 py-3 text-sm ${
                       roster ? "border-amber-300 bg-amber-50 text-amber-800" : "border-amber-200 bg-amber-50 text-amber-800"
@@ -369,7 +375,7 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                     <button
                       type="button"
                       onClick={handleGenerate}
-                      disabled={loading || selectedPlayerIds.length < 4}
+                      disabled={loading || selectedPlayerIds.length < 4 || Boolean(configIssue)}
                       className="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
                     >
                       {roster ? (isRosterStale ? "Regenerate Updated Roster" : "Regenerate Roster") : "Generate Roster"}

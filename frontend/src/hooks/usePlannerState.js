@@ -5,6 +5,7 @@ import {
   DUPLICATE_KNOCKOUT_VIOLATION_PREFIX,
   PLANNER_STORAGE_KEY,
   createSessionName,
+  getLeagueKnockoutIssue,
   getLeagueRequestPayload,
   getPlannerRosterSignature,
   getRosterRevalidatePayload,
@@ -346,7 +347,12 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
   }
 
   const canContinueFromPlayers = selectedPlayerIds.length >= 4;
-  const canContinueFromSettings = config.num_courts >= 1;
+  const configIssue = getLeagueKnockoutIssue({
+    drawType: config.draw_type,
+    playerCount: selectedPlayerIds.length,
+    pairCount: fixedPairIds.length,
+  });
+  const canContinueFromSettings = config.num_courts >= 1 && !configIssue;
 
   return {
     plannerStep,
@@ -378,6 +384,7 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
     duplicateKnockoutViolations,
     canContinueFromPlayers,
     canContinueFromSettings,
+    configIssue,
     handleGenerate,
     clearPlannerError,
     dismissDuplicateKnockoutViolations,
