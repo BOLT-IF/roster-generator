@@ -204,11 +204,9 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
       setPlannerStep(3);
       navigateToPlanner();
     } catch (error) {
+      // Keep the previous roster, its signature and any manual edits: a failed
+      // request must not destroy work the organiser already has.
       setGenerateError(error.message);
-      setRoster(null);
-      setGeneratedRosterBaseline(null);
-      setRosterSignature(null);
-      setHasManualRosterEdits(false);
       setSelectedRosterTarget(null);
       window.setTimeout(() => {
         reviewStepRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
