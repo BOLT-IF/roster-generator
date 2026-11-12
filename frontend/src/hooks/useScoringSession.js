@@ -192,6 +192,22 @@ export default function useScoringSession({
     if (!currentSession?.sessionId || !currentSession.canEdit) return;
     const { sessionId, editToken } = currentSession;
 
+    let confirmKnockoutWipe = false;
+    if (stage === "league") {
+      const knockoutStarted =
+        currentSession.endedKnockoutRounds?.some(Boolean) ||
+        (currentSession.knockoutScoresByRound ?? []).some((round) =>
+          round.some((score) => score.teamA !== "" || score.teamB !== "")
+        );
+      if (knockoutStarted) {
+        const accepted = window.confirm(
+          "Re-opening a league round deletes all knockout scores and results for this session. Continue?"
+        );
+        if (!accepted) return;
+        confirmKnockoutWipe = true;
+      }
+    }
+
     setPendingRoundAction({ stage, roundIndex, action: "edit" });
     setLoadingLabel("Re-opening round...");
     setLoading(true);
@@ -202,6 +218,7 @@ export default function useScoringSession({
       const updated = await editSharedRound(sessionId, {
         stage,
         round_index: roundIndex,
+        confirm_knockout_wipe: confirmKnockoutWipe,
       }, editToken);
       const normalized = mergePendingScoreEdits(normalizeSession(updated), pendingScoreEditsRef.current);
       rememberSessionAccess(normalized.sessionId, normalized.editToken);

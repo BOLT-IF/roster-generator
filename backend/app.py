@@ -444,6 +444,7 @@ class RoundEndRequest(BaseModel):
 class RoundEditRequest(BaseModel):
     stage: str
     round_index: int
+    confirm_knockout_wipe: bool = False
 
 
 class SessionRenameRequest(BaseModel):
@@ -2613,23 +2614,43 @@ def edit_round(session_id: str, req: RoundEditRequest, edit_token: str | None = 
             if not round_record or not round_record.ended:
                 raise HTTPException(status_code=409, detail="Only ended rounds can be edited")
 
-            _capture_undo_snapshot(payload)
-            round_record.ended = False
-            db.add(round_record)
+            league_records, _ = _get_stage_progress(db, session_id, "league")
+            ended_indices = [item.round_index for item in league_records if item.ended]
+            if req.round_index != max(ended_indices):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Only the most recently ended round can be edited; "
+                        "re-opening an earlier round would leave later rounds inconsistent"
+                    ),
+                )
+
             knockout_rounds = db.scalars(
                 select(SessionRoundRecord).where(
                     SessionRoundRecord.session_id == session_id,
                     SessionRoundRecord.stage == "knockout",
                 )
             ).all()
-            for knockout_round in knockout_rounds:
-                db.delete(knockout_round)
             knockout_scores = db.scalars(
                 select(SessionScoreRecord).where(
                     SessionScoreRecord.session_id == session_id,
                     SessionScoreRecord.stage == "knockout",
                 )
             ).all()
+            if (knockout_rounds or knockout_scores) and not req.confirm_knockout_wipe:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Editing a league round deletes all knockout scores and results for this "
+                        "session. Retry with confirm_knockout_wipe=true to proceed."
+                    ),
+                )
+
+            _capture_undo_snapshot(payload)
+            round_record.ended = False
+            db.add(round_record)
+            for knockout_round in knockout_rounds:
+                db.delete(knockout_round)
             for knockout_score in knockout_scores:
                 db.delete(knockout_score)
             return True
