@@ -97,6 +97,7 @@ def startup():
     cache.initialize()
     with get_db_session() as db:
         _ensure_player_registry(db)
+        _backfill_player_normalized_names(db)
 
 
 def _cache_ttl(name: str, default_seconds: int) -> int:
@@ -544,6 +545,33 @@ def _ensure_score_slot(scores: list[list[dict[str, int | str]]], round_index: in
 
 def _normalize_player_name(value: str) -> str:
     return " ".join(value.strip().lower().split())
+
+
+def _backfill_player_normalized_names(db):
+    """Fill empty normalized names left by the legacy schema migration.
+
+    The migration added the normalized_* columns with DEFAULT '' and no
+    backfill, so pre-feature rows kept empty normalized names and the UNIQUE
+    constraints never fired - duplicate players could be created freely.
+    First-wins on exact duplicates: the conflicting row keeps its empty
+    value rather than failing the whole backfill.
+    """
+    rows = db.scalars(select(PlayerRecord)).all()
+    if not rows:
+        return
+    taken_full = {row.normalized_full_name for row in rows if row.normalized_full_name}
+    taken_short = {row.normalized_short_name for row in rows if row.normalized_short_name}
+    for row in rows:
+        if not row.normalized_full_name:
+            candidate = _normalize_player_name(row.full_name)
+            if candidate and candidate not in taken_full:
+                row.normalized_full_name = candidate
+                taken_full.add(candidate)
+        if not row.normalized_short_name:
+            candidate = _normalize_player_name(row.short_name)
+            if candidate and candidate not in taken_short:
+                row.normalized_short_name = candidate
+                taken_short.add(candidate)
 
 
 def _generate_player_id() -> str:

@@ -1531,5 +1531,57 @@ class EngineCompletenessTests(unittest.TestCase):
                 self.assertEqual(len(on_courts), courts * 4)
 
 
+class LegacyNameBackfillTests(unittest.TestCase):
+    """L-08: legacy players rows get their normalized names backfilled.
+
+    The schema migration added normalized_* columns with DEFAULT '' and no
+    backfill, so pre-feature rows kept empty normalized names: the DB UNIQUE
+    constraints never fired, and creating 'Legacy Larry' twice succeeded.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_backfill_restores_conflict_detection_for_legacy_rows(self):
+        import uuid
+
+        import app as app_module
+
+        tag = uuid.uuid4().hex[:8]
+        full_name = f"Legacy Larry {tag}"
+        short_name = f"LL{tag}"
+        created = self.client.post("/api/players", json={"full_name": full_name, "short_name": short_name})
+        self.assertEqual(created.status_code, 201, created.text)
+        player_id = created.json()["player_id"]
+
+        # Simulate a pre-migration row: normalized columns empty.
+        with app_module.get_db_session() as db:
+            row = db.get(app_module.PlayerRecord, player_id)
+            row.normalized_full_name = ""
+            row.normalized_short_name = ""
+
+        # The next boot backfills normalized names for legacy rows.
+        with app_module.get_db_session() as db:
+            app_module._backfill_player_normalized_names(db)
+
+        with app_module.get_db_session() as db:
+            row = db.get(app_module.PlayerRecord, player_id)
+            self.assertEqual(row.normalized_full_name, full_name.lower())
+            self.assertEqual(row.normalized_short_name, short_name.lower())
+
+        duplicate = self.client.post("/api/players", json={"full_name": full_name, "short_name": short_name})
+        self.assertEqual(
+            duplicate.status_code,
+            409,
+            f"legacy row must conflict again after backfill, got {duplicate.status_code}: {duplicate.text}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
