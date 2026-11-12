@@ -1254,5 +1254,138 @@ class KnockoutTieTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
 
+class QualifierNormalizationTests(unittest.TestCase):
+    """H-04: legacy sessions with odd knockout_qualifiers must not crash.
+
+    Sessions created before request validation could hold
+    knockout_qualifiers=3 (or 5+). Completing their knockout hit seeds[3]
+    with a 3-entry list: an IndexError 500 on every end-round attempt, and
+    the planned-rounds count disagreed with the built bracket.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _create_lk_session(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=3,
+            pair_games=1,
+        )
+        return create_round_robin_session(
+            self.client,
+            name=name,
+            roster=roster,
+            draw_config={"draw_type": "league_knockout", "league_meetings": 1, "knockout_qualifiers": 4},
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            pair_games=1,
+        )
+
+    def _corrupt_to_legacy_qualifiers(self, session_id, qualifiers):
+        import copy
+
+        import app as app_module
+
+        with app_module.get_db_session() as db:
+            record = db.scalar(
+                app_module.select(app_module.SharedSessionRecord).where(
+                    app_module.SharedSessionRecord.session_id == session_id
+                )
+            )
+            data = copy.deepcopy(record.data)
+            data["draw_config"]["knockout_qualifiers"] = qualifiers
+            record.data = data
+
+    def _complete_league(self, session):
+        for round_index in range(3):
+            post_action(
+                self.client, session, "start-round", {"stage": "league", "round_index": round_index}
+            )
+            for court in range(2):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamA", "value": 21},
+                )
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamB", "value": 15},
+                )
+            ended = post_action(
+                self.client, session, "end-round", {"stage": "league", "round_index": round_index}
+            )
+            assert ended.status_code == 200, ended.text
+
+    def test_legacy_three_qualifiers_completes_without_500(self):
+        session = self._create_lk_session("H04 Legacy Three")
+        self._corrupt_to_legacy_qualifiers(session["session_id"], 3)
+        self._complete_league(session)
+
+        started = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(
+            self.client, session, "end-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(ended.status_code, 200, f"previously IndexError 500: {ended.text}")
+
+        detail = get_session(self.client, session).json()
+        self.assertTrue(detail["ended_knockout_rounds"][0])
+
+    def test_legacy_five_qualifiers_completes_without_500(self):
+        session = self._create_lk_session("H04 Legacy Five")
+        self._corrupt_to_legacy_qualifiers(session["session_id"], 5)
+        self._complete_league(session)
+
+        started = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(
+            self.client, session, "end-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+
 if __name__ == "__main__":
     unittest.main()

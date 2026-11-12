@@ -175,7 +175,13 @@ export function buildKnockoutRounds(
     roster.rounds,
     filterScoresByEndedRounds(roster.rounds, leagueScoresByRound, endedLeagueRounds)
   );
-  const qualifierCount = Math.min(drawConfig.knockout_qualifiers || 4, pairStandings.length);
+  // Mirror the server's normalization: legacy sessions can hold odd
+  // qualifier counts (3, 5, ...); normalize to the bracket the standings
+  // support so seeds[3] can never be undefined.
+  let qualifierCount = Math.min(drawConfig.knockout_qualifiers || 4, pairStandings.length);
+  if (qualifierCount >= 2 && qualifierCount !== 2 && qualifierCount !== 4) {
+    qualifierCount = pairStandings.length >= 4 ? 4 : 2;
+  }
   if (qualifierCount < 2) return [];
 
   const seeds = pairStandings.slice(0, qualifierCount).map(([pairName]) => pairName.split(" & "));

@@ -283,8 +283,12 @@ class DrawConfig(BaseModel):
     @field_validator("knockout_qualifiers")
     @classmethod
     def qualifiers_supported(cls, v):
-        if v not in (2, 4):
-            raise ValueError("knockout_qualifiers must be 2 or 4")
+        # Lenient here on purpose: this model also validates stored payloads
+        # on serialization, and legacy sessions can hold odd counts. Odd
+        # values are normalized when the bracket is built; creation enforces
+        # the supported set.
+        if v < 2:
+            raise ValueError("knockout_qualifiers must be at least 2")
         return v
 
 
@@ -1047,6 +1051,22 @@ def _create_knockout_round(label: str, round_number: int, matches: list[list[lis
     }
 
 
+def _normalized_qualifier_count(draw_config: dict, available: int) -> int:
+    """Normalize knockout_qualifiers to the bracket shapes the engine builds.
+
+    Legacy sessions (created before request validation) can hold odd counts
+    like 3 or 5. Normalize to 4 when at least 4 pairs are available, else 2,
+    so bracket indexing is always safe and the planned round count matches
+    the built bracket.
+    """
+    qualifiers = min(draw_config.get("knockout_qualifiers", 4), available)
+    if qualifiers < 2:
+        return 0
+    if qualifiers not in (2, 4):
+        qualifiers = 4 if available >= 4 else 2
+    return qualifiers
+
+
 def _build_knockout_rounds_for_stats(
     draw_config: dict,
     roster_rounds: list[dict],
@@ -1061,7 +1081,7 @@ def _build_knockout_rounds_for_stats(
         return []
 
     pair_standings = _build_pair_standings(roster_rounds, league_scores_by_round)
-    qualifier_count = min(draw_config.get("knockout_qualifiers", 4), len(pair_standings))
+    qualifier_count = _normalized_qualifier_count(draw_config, len(pair_standings))
     if qualifier_count < 2:
         return []
 
@@ -1619,7 +1639,7 @@ def _count_league_pairs(payload: dict) -> int:
 def _planned_knockout_rounds(draw_config: dict, pair_count: int) -> int:
     if draw_config.get("draw_type") != "league_knockout":
         return 0
-    qualifiers = min(draw_config.get("knockout_qualifiers", 4), pair_count)
+    qualifiers = _normalized_qualifier_count(draw_config, pair_count)
     if qualifiers >= 4:
         return 2
     if qualifiers >= 2:
@@ -2098,6 +2118,8 @@ def create_shared_session(req: SharedSessionCreateRequest):
         inferred_players = sorted(seen_players)
 
     if req.draw_config.draw_type == "league_knockout":
+        if req.draw_config.knockout_qualifiers not in (2, 4):
+            raise HTTPException(status_code=422, detail="knockout_qualifiers must be 2 or 4")
         pair_count = len(req.fixed_pairs) if req.fixed_pairs else max(len(inferred_players) // 2, 1)
         if req.draw_config.knockout_qualifiers > pair_count:
             raise HTTPException(
