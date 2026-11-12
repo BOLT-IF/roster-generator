@@ -547,7 +547,9 @@ def _ensure_score_slot(scores: list[list[dict[str, int | str]]], round_index: in
 
 
 def _normalize_player_name(value: str) -> str:
-    return " ".join(value.strip().lower().split())
+    # NFC-fold so composed and decomposed forms of the same name (precomposed
+    # 'é' vs 'e' + combining accent) map to one player identity.
+    return unicodedata.normalize("NFC", " ".join(value.strip().lower().split()))
 
 
 def _backfill_player_normalized_names(db):

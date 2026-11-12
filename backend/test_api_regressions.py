@@ -1747,5 +1747,45 @@ class CompletedAtPersistenceTests(unittest.TestCase):
         )
 
 
+class NfcNameNormalizationTests(unittest.TestCase):
+    """L-07a.3: composed and decomposed name forms are the same player.
+
+    Without NFC folding, 'José' stored as NFC and a second 'José' typed in
+    NFD (e + combining accent) created two different players.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_decomposed_form_conflicts_with_composed_form(self):
+        import unicodedata
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        composed = unicodedata.normalize("NFC", f"José {tag}")
+        decomposed = unicodedata.normalize("NFD", f"José {tag}")
+        self.assertNotEqual(composed, decomposed, "sanity: the two forms must differ as raw strings")
+
+        first = self.client.post(
+            "/api/players", json={"full_name": composed, "short_name": f"JZa{tag}"}
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+
+        duplicate = self.client.post(
+            "/api/players", json={"full_name": decomposed, "short_name": f"JZb{tag}"}
+        )
+        self.assertEqual(
+            duplicate.status_code,
+            409,
+            f"decomposed form of the same name must conflict, got {duplicate.status_code}: {duplicate.text}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
