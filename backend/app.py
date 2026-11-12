@@ -1914,6 +1914,13 @@ def api_generate(req: RosterRequest):
             warnings=warnings,
         )
 
+    if req.seed is None:
+        # An unseeded request must produce a fresh roster every time; caching
+        # by request fingerprint would return the identical roster for the
+        # full generate TTL (an hour by default), silently breaking the
+        # planner's "Regenerate Roster" action.
+        return jsonable_encoder(build_response())
+
     return _cache_get_or_set(
         "roster",
         [request_fingerprint],
