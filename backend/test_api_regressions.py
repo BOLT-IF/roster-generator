@@ -1583,5 +1583,54 @@ class LegacyNameBackfillTests(unittest.TestCase):
         )
 
 
+class SeedGatingTests(unittest.TestCase):
+    """L-05: the 22-name default directory seeds only when enabled.
+
+    Every empty database was auto-seeded with 22 hardcoded personal names,
+    on any deployment. Seeding is now gated by ROSTER_SEED_PLAYERS (default
+    enabled, preserving the group's local convenience; '0' gives clean
+    deployments).
+    """
+
+    def _count_players_on_fresh_db(self, flag):
+        import os
+        import subprocess
+        import sys
+
+        db_path = f"/tmp/roster-seed-{flag}-{os.getpid()}.db"
+        script = "\n".join([
+            "import os",
+            "os.environ['PLAYWRIGHT_TEST_MODE'] = '1'",
+            f"os.environ['DATABASE_URL'] = 'sqlite:///{db_path}'",
+            "os.environ['CACHE_ENABLED'] = 'false'",
+            f"os.environ['ROSTER_SEED_PLAYERS'] = '{flag}'",
+            "from database import init_db, get_db_session",
+            "init_db()",
+            "import app as a",
+            "with get_db_session() as db:",
+            "    a._ensure_player_registry(db)",
+            "    print(len(db.scalars(a.select(a.PlayerRecord)).all()))",
+        ])
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return int(result.stdout.strip().splitlines()[-1])
+
+    def test_default_directory_seeding_is_env_gated(self):
+        disabled = self._count_players_on_fresh_db("0")
+        self.assertEqual(disabled, 0, "ROSTER_SEED_PLAYERS=0 must seed nothing on an empty database")
+
+        enabled = self._count_players_on_fresh_db("1")
+        self.assertEqual(
+            enabled,
+            22,
+            "default ROSTER_SEED_PLAYERS must keep seeding the 22-name directory",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -723,7 +723,8 @@ def _ensure_player_registry(db):
             discovered_names.add(cleaned)
 
     if not active_players and not discovered_names:
-        discovered_names.update(DEFAULT_PLAYER_DIRECTORY)
+        if os.getenv("ROSTER_SEED_PLAYERS", "1") != "0":
+            discovered_names.update(DEFAULT_PLAYER_DIRECTORY)
 
     changed = False
     for name in sorted(discovered_names):
