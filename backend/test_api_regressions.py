@@ -42,8 +42,9 @@ def generate_roster(client, **overrides):
     return response.json()
 
 
-def create_round_robin_session(client, name="Regression Session"):
-    roster = generate_roster(client)
+def create_round_robin_session(client, name="Regression Session", roster=None):
+    if roster is None:
+        roster = generate_roster(client)
     response = client.post(
         "/api/sessions",
         json={
@@ -296,6 +297,63 @@ class MemoryCacheFreshnessTests(unittest.TestCase):
             app_module.cache._enabled = original_enabled
             app_module.cache._backend = original_backend
             client.__exit__(None, None, None)
+
+
+class ReopenedSessionStatsTests(unittest.TestCase):
+    """M-08a: reopening a completed session must update the leaderboard.
+
+    The session factory runs with autoflush=False; without an explicit flush
+    between deleting a session's analytics rows and rebuilding the summary,
+    the rebuild re-counted the rows it was about to delete and the stale
+    totals (including championships) survived the reopen.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_reopening_completed_session_updates_leaderboard(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        players = [f"Ropen {tag} {i}" for i in range(4)]
+        roster = generate_roster(self.client, players=players)
+        session = create_round_robin_session(self.client, name=f"M08a Reopen {tag}", roster=roster)
+
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamB", "value": 15},
+        )
+        ended = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+        stats = self.client.get("/api/stats/players").json()
+        before = {row["player_name"] for row in stats}
+        self.assertTrue(set(players).issubset(before), f"players missing after completion: {set(players) - before}")
+
+        reopened = post_action(self.client, session, "edit-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(reopened.status_code, 200, reopened.text)
+
+        stats_after = self.client.get("/api/stats/players").json()
+        after = {row["player_name"] for row in stats_after}
+        self.assertFalse(
+            set(players).intersection(after),
+            f"reopened session still contributes to the leaderboard: {set(players).intersection(after)}",
+        )
 
 
 if __name__ == "__main__":
