@@ -12,6 +12,8 @@ from copy import deepcopy
 
 from datetime import datetime, timezone
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -48,7 +50,17 @@ from roster_engine import (
     RosterError,
 )
 
-app = FastAPI(title="Badminton Roster API")
+@asynccontextmanager
+async def lifespan(app_instance):
+    init_db()
+    cache.initialize()
+    with get_db_session() as db:
+        _ensure_player_registry(db)
+        _backfill_player_normalized_names(db)
+    yield
+
+
+app = FastAPI(title="Badminton Roster API", lifespan=lifespan)
 
 ADMIN_RECOVERY_TOKEN = os.getenv("ADMIN_RECOVERY_TOKEN", "thisismytoken")
 DEFAULT_PLAYER_DIRECTORY = [
@@ -89,15 +101,6 @@ async def request_validation_exception_handler(request, exc):
         status_code=422,
         content={"detail": _sanitize_error_details(jsonable_encoder(exc.errors()))},
     )
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    cache.initialize()
-    with get_db_session() as db:
-        _ensure_player_registry(db)
-        _backfill_player_normalized_names(db)
 
 
 def _cache_ttl(name: str, default_seconds: int) -> int:
