@@ -13,9 +13,11 @@ from copy import deepcopy
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
+import unicodedata
 from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -61,6 +63,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _sanitize_error_details(value):
+    """Drop unencodable characters (lone surrogates) from error payloads.
+
+    FastAPI's default request-validation handler echoes the raw input inside
+    the 422 details; a lone surrogate in that input made the response itself
+    fail to UTF-8 encode, turning a clean 422 into a 500.
+    """
+    if isinstance(value, str):
+        return value.encode("utf-8", "ignore").decode("utf-8")
+    if isinstance(value, list):
+        return [_sanitize_error_details(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_error_details(item) for key, item in value.items()}
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request, exc):
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _sanitize_error_details(jsonable_encoder(exc.errors()))},
+    )
 
 
 @app.on_event("startup")
@@ -124,6 +152,19 @@ class RosterRequest(BaseModel):
     def players_not_empty(cls, v):
         if len(v) < 4:
             raise ValueError("Need at least 4 players")
+        if len(v) > 64:
+            raise ValueError("At most 64 players are supported")
+        seen = set()
+        for name in v:
+            if not name or not name.strip():
+                raise ValueError("Player names must be non-empty")
+            if any(0xD800 <= ord(ch) <= 0xDFFF for ch in name):
+                raise ValueError("Player names contain invalid characters")
+            if " & " in name or "/" in name:
+                raise ValueError("Player names cannot contain ' & ' or '/' (reserved for pair keys)")
+            if name in seen:
+                raise ValueError(f"Duplicate player name: {name}")
+            seen.add(name)
         return v
 
     @field_validator("num_courts")
@@ -131,6 +172,47 @@ class RosterRequest(BaseModel):
     def courts_positive(cls, v):
         if v < 1:
             raise ValueError("Need at least 1 court")
+        if v > 10:
+            raise ValueError("At most 10 courts are supported")
+        return v
+
+    @field_validator("rounds")
+    @classmethod
+    def rounds_in_range(cls, v):
+        if v < 1:
+            raise ValueError("Need at least 1 round")
+        if v > 50:
+            raise ValueError("At most 50 rounds are supported")
+        return v
+
+    @field_validator("court_numbers")
+    @classmethod
+    def court_numbers_not_empty(cls, v):
+        if v is not None and len(v) == 0:
+            raise ValueError("court_numbers cannot be empty")
+        return v
+
+    @field_validator("pair_games")
+    @classmethod
+    def pair_games_at_least_one(cls, v):
+        if v < 1:
+            raise ValueError("pair_games must be at least 1")
+        return v
+
+    @field_validator("pair_start_round")
+    @classmethod
+    def pair_start_round_at_least_one(cls, v):
+        if v < 1:
+            raise ValueError("pair_start_round must be at least 1")
+        return v
+
+    @field_validator("max_consecutive_rest")
+    @classmethod
+    def max_consecutive_rest_in_range(cls, v):
+        if v < 1:
+            raise ValueError("max_consecutive_rest must be at least 1")
+        if v > 10:
+            raise ValueError("max_consecutive_rest must be at most 10")
         return v
 
 
@@ -191,6 +273,20 @@ class DrawConfig(BaseModel):
     league_meetings: int = 1
     knockout_qualifiers: int = 4
 
+    @field_validator("draw_type")
+    @classmethod
+    def draw_type_supported(cls, v):
+        if v not in ("round_robin", "league_knockout"):
+            raise ValueError("draw_type must be 'round_robin' or 'league_knockout'")
+        return v
+
+    @field_validator("knockout_qualifiers")
+    @classmethod
+    def qualifiers_supported(cls, v):
+        if v not in (2, 4):
+            raise ValueError("knockout_qualifiers must be 2 or 4")
+        return v
+
 
 class SessionPlayerReference(BaseModel):
     player_id: str
@@ -206,6 +302,20 @@ class SharedSessionCreateRequest(BaseModel):
     fixed_pair_player_ids: list[list[str]] = []
     fixed_pairs: list[list[str]] = []
     limits: dict[str, int] = {}
+
+    @field_validator("name")
+    @classmethod
+    def validate_session_name(cls, value):
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in cleaned):
+            raise ValueError("Session name contains invalid characters")
+        if len(cleaned) > 120:
+            raise ValueError("Session name must be 120 characters or fewer")
+        return cleaned
     pair_games: int = 3
     pair_start_round: int = 5
     max_consecutive_rest: int = 1
@@ -345,6 +455,8 @@ class SessionRenameRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Session name is required")
+        if any(0xD800 <= ord(ch) <= 0xDFFF for ch in cleaned):
+            raise ValueError("Session name contains invalid characters")
         if len(cleaned) > 120:
             raise ValueError("Session name must be 120 characters or fewer")
         return cleaned
@@ -355,6 +467,22 @@ class ScoreMutationResponse(BaseModel):
     version: int
 
 
+def _sanitize_player_name(value: str) -> str:
+    # Collapse all whitespace - including newlines and control characters like
+    # NUL, which were previously stored verbatim - into single spaces.
+    cleaned = "".join(
+        " " if ch.isspace() or unicodedata.category(ch) == "Cc" else ch for ch in value
+    )
+    return " ".join(cleaned.strip().split())
+
+
+def _reject_reserved_name_characters(value: str, field: str):
+    if any(0xD800 <= ord(ch) <= 0xDFFF for ch in value):
+        raise ValueError(f"{field} contains invalid characters")
+    if " & " in value or "/" in value:
+        raise ValueError(f"{field} cannot contain ' & ' or '/' (reserved for pair keys)")
+
+
 class PlayerCreateRequest(BaseModel):
     full_name: str
     short_name: str
@@ -362,21 +490,23 @@ class PlayerCreateRequest(BaseModel):
     @field_validator("full_name")
     @classmethod
     def validate_full_name(cls, value: str):
-        cleaned = " ".join(value.strip().split())
+        cleaned = _sanitize_player_name(value)
         if not cleaned:
             raise ValueError("Value is required")
         if len(cleaned) > 120:
             raise ValueError("Value must be 120 characters or fewer")
+        _reject_reserved_name_characters(cleaned, "Full name")
         return cleaned
 
     @field_validator("short_name")
     @classmethod
     def validate_short_name(cls, value: str):
-        cleaned = " ".join(value.strip().split())
+        cleaned = _sanitize_player_name(value)
         if not cleaned:
             raise ValueError("Value is required")
         if len(cleaned) > 60:
             raise ValueError("Short name must be 60 characters or fewer")
+        _reject_reserved_name_characters(cleaned, "Short name")
         return cleaned
 
 
@@ -1939,6 +2069,16 @@ def api_revalidate_roster(req: RosterRevalidateRequest):
     return _normalize_existing_roster(req, req.roster)
 
 
+def _validation_error_detail(exc: ValidationError) -> str:
+    errors = exc.errors()
+    if not errors:
+        return "Invalid request"
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc", ()))
+    message = first.get("msg", "Invalid request")
+    return f"{location}: {message}" if location else message
+
+
 @app.post("/api/sessions", response_model=SharedSessionResponse)
 def create_shared_session(req: SharedSessionCreateRequest):
     if req.admin_token != ADMIN_RECOVERY_TOKEN:
@@ -1954,20 +2094,33 @@ def create_shared_session(req: SharedSessionCreateRequest):
             seen_players.update(round_data.resting)
         inferred_players = sorted(seen_players)
 
-    normalized_roster = _normalize_existing_roster(
-        RosterRequest(
-            players=inferred_players,
-            fixed_pairs=req.fixed_pairs,
-            num_courts=len(req.roster.court_numbers),
-            court_numbers=req.roster.court_numbers,
-            rounds=len(req.roster.rounds),
-            limits=req.limits,
-            pair_games=req.pair_games,
-            pair_start_round=req.pair_start_round,
-            max_consecutive_rest=req.max_consecutive_rest,
-        ),
-        req.roster,
-    )
+    if req.draw_config.draw_type == "league_knockout":
+        pair_count = len(req.fixed_pairs) if req.fixed_pairs else max(len(inferred_players) // 2, 1)
+        if req.draw_config.knockout_qualifiers > pair_count:
+            raise HTTPException(
+                status_code=422,
+                detail="knockout_qualifiers cannot exceed the number of fixed pairs",
+            )
+
+    try:
+        normalized_roster = _normalize_existing_roster(
+            RosterRequest(
+                players=inferred_players,
+                fixed_pairs=req.fixed_pairs,
+                num_courts=len(req.roster.court_numbers),
+                court_numbers=req.roster.court_numbers,
+                rounds=len(req.roster.rounds),
+                limits=req.limits,
+                pair_games=req.pair_games,
+                pair_start_round=req.pair_start_round,
+                max_consecutive_rest=req.max_consecutive_rest,
+            ),
+            req.roster,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_error_detail(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     payload = {
         "name": req.name or f"session-{secrets.token_hex(2)}",
