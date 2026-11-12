@@ -136,14 +136,6 @@ export async function endSharedRound(sessionId, payload, editToken) {
   return readJson(res);
 }
 
-export async function undoSharedSession(sessionId) {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/undo`, {
-    method: "POST",
-  });
-
-  return readJson(res);
-}
-
 export async function editSharedRound(sessionId, payload, editToken) {
   const res = await fetch(withEditToken(`/api/sessions/${sessionId}/edit-round`, editToken), {
     method: "POST",

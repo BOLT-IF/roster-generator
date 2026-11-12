@@ -373,7 +373,19 @@ export default function useScoringSession({
 
   function handleScoreCommit(stage, roundIndex, courtIndex, teamKey, rawValue) {
     if (!currentSession?.sessionId || !currentSession.canEdit) return;
-    void pushScoreUpdate(currentSession.sessionId, currentSession.editToken, stage, roundIndex, courtIndex, teamKey, rawValue);
+    // pushScoreUpdate already rolls back and surfaces the failure via setPageError;
+    // the catch only logs so the rethrown error is not an unhandled rejection.
+    pushScoreUpdate(
+      currentSession.sessionId,
+      currentSession.editToken,
+      stage,
+      roundIndex,
+      courtIndex,
+      teamKey,
+      rawValue
+    ).catch((error) => {
+      console.error("Score update failed:", error);
+    });
   }
 
   return {
