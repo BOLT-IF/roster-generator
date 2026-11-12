@@ -883,5 +883,121 @@ class KnockoutStartGuardsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
 
+class RoundLifecycleTests(unittest.TestCase):
+    """M-07: score writes require started rounds; only the active round ends.
+
+    _validate_score_target checked 'ended' but not 'started', so scores
+    could be pre-entered for rounds nobody had begun. end_round accepted any
+    round index up to the active one, so after re-opening an earlier round it
+    could be ended again out of order, leaving later rounds ended around a
+    temporally inconsistent earlier one.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _create_two_round_session(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=2,
+        )
+        return create_round_robin_session(self.client, name=name, roster=roster)
+
+    def test_score_rejected_for_unstarted_round(self):
+        session = self._create_two_round_session("M07 Unstarted Score")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        response = post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 1, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("started", response.json()["detail"].lower())
+
+    def test_batch_rejected_for_unstarted_round(self):
+        session = self._create_two_round_session("M07 Unstarted Batch")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        batch = post_action(
+            self.client,
+            session,
+            "scores/batch",
+            {
+                "stage": "league",
+                "round_index": 1,
+                "updates": [
+                    {"stage": "league", "round_index": 1, "court_index": 0, "team_key": "teamA", "value": 21},
+                ],
+            },
+        )
+        self.assertEqual(batch.status_code, 409, batch.text)
+
+    def test_only_the_active_round_can_be_ended(self):
+        session = self._create_two_round_session("M07 Out Of Order End")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamB", "value": 15},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 1, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 1, "team_key": "teamB", "value": 15},
+        )
+        post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 1})
+
+        # Re-open round 0 (still allowed at this point in the stack) and try
+        # to end it while round 1 is the active round.
+        reopened = post_action(self.client, session, "edit-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(reopened.status_code, 200, reopened.text)
+        response = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("active", response.json()["detail"].lower())
+
+    def test_scoring_and_ending_the_active_round_still_work(self):
+        session = self._create_two_round_session("M07 Happy Path")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "league", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "league", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+
 if __name__ == "__main__":
     unittest.main()
