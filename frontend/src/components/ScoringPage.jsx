@@ -397,7 +397,10 @@ function RoundList({
         const canStart = sourceIndex === activeRound + 1;
         const isEnded = endedRounds[sourceIndex];
         const isLive = status === "live";
-        const canEnd = isLive && roundScores.every(isScoreComplete);
+        const hasTiedMatch = roundScores.some(
+          (score) => isScoreComplete(score) && score.teamA === score.teamB
+        );
+        const canEnd = isLive && roundScores.every(isScoreComplete) && !(stage === "knockout" && hasTiedMatch);
         const isPendingAction =
           pendingRoundAction?.stage === stage && pendingRoundAction?.roundIndex === sourceIndex;
         const actionLabel = isEnded ? "Edit Scores" : isLive ? "End Round" : "Start Round";

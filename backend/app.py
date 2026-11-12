@@ -2582,6 +2582,11 @@ def end_round(session_id: str, req: RoundEndRequest, edit_token: str | None = No
         round_scores = _get_scores_by_round(db, session_id, "knockout", [0 for _ in range(req.round_index + 1)])[req.round_index]
         if not round_scores or not all(score["teamA"] != "" and score["teamB"] != "" for score in round_scores):
             raise HTTPException(status_code=409, detail="Enter all scores before ending the round")
+        if any(score["teamA"] == score["teamB"] for score in round_scores):
+            raise HTTPException(
+                status_code=409,
+                detail="Knockout matches cannot end in a tie - adjust the scores or play a tiebreaker",
+            )
 
         _capture_undo_snapshot(payload)
         round_record.ended = True
