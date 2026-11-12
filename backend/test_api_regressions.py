@@ -1137,5 +1137,122 @@ class EditRoundGuardsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
 
+class KnockoutTieTests(unittest.TestCase):
+    """H-09: a knockout round containing a tied match cannot be ended.
+
+    Ending a tied semifinal or final left the session permanently stuck:
+    'complete' on the screen, never in history, champion forever TBD.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _complete_league(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=3,
+            pair_games=1,
+        )
+        session = create_round_robin_session(
+            self.client,
+            name=name,
+            roster=roster,
+            draw_config={"draw_type": "league_knockout", "league_meetings": 1, "knockout_qualifiers": 4},
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            pair_games=1,
+        )
+        for round_index in range(3):
+            post_action(self.client, session, "start-round", {"stage": "league", "round_index": round_index})
+            for court in range(2):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamA", "value": 21},
+                )
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamB", "value": 15},
+                )
+            ended = post_action(
+                self.client, session, "end-round", {"stage": "league", "round_index": round_index}
+            )
+            assert ended.status_code == 200, ended.text
+        return session
+
+    def test_tied_knockout_round_cannot_be_ended(self):
+        session = self._complete_league("H09 Tie")
+        post_action(self.client, session, "start-round", {"stage": "knockout", "round_index": 0})
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 21},
+            )
+
+        response = post_action(self.client, session, "end-round", {"stage": "knockout", "round_index": 0})
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("tie", response.json()["detail"].lower())
+
+        detail = get_session(self.client, session).json()
+        self.assertFalse(detail["ended_knockout_rounds"][0], "round must not be marked ended after tie rejection")
+
+    def test_decisive_knockout_round_still_ends(self):
+        session = self._complete_league("H09 Decisive")
+        post_action(self.client, session, "start-round", {"stage": "knockout", "round_index": 0})
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        response = post_action(self.client, session, "end-round", {"stage": "knockout", "round_index": 0})
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def test_tied_league_round_can_still_be_ended(self):
+        session = create_round_robin_session(self.client, name="H09 League Draw RR")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamB", "value": 21},
+        )
+        response = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(response.status_code, 200, response.text)
+
+
 if __name__ == "__main__":
     unittest.main()
