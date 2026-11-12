@@ -711,5 +711,82 @@ class RequestValidationTests(unittest.TestCase):
         self.assertNotIn("\x00", body["full_name"] + body["short_name"])
 
 
+class ScoreBoundsTests(unittest.TestCase):
+    """M-11: score values must be bounded integers.
+
+    Negative, oversized, and overflow values were accepted (or 500'd on
+    int overflow); the UI silently clamped negatives to 0 so the screen and
+    the server disagreed on what was stored.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _score(self, session, value):
+        return post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": value},
+        )
+
+    def test_negative_score_rejected(self):
+        session = create_round_robin_session(self.client, name="M11 Negative")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        response = self._score(session, -5)
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_overflow_score_rejected(self):
+        session = create_round_robin_session(self.client, name="M11 Overflow")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        response = self._score(session, 10**20)
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_score_above_cap_rejected(self):
+        session = create_round_robin_session(self.client, name="M11 Above Cap")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        response = self._score(session, 100)
+        self.assertEqual(response.status_code, 422, response.text)
+
+    def test_boundary_scores_accepted(self):
+        session = create_round_robin_session(self.client, name="M11 Boundaries")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        for value in (0, 99):
+            response = self._score(session, value)
+            self.assertEqual(response.status_code, 200, f"value {value}: {response.text}")
+
+    def test_clearing_a_score_still_allowed(self):
+        session = create_round_robin_session(self.client, name="M11 Clear")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(self._score(session, 21).status_code, 200)
+        response = self._score(session, None)
+        self.assertEqual(response.status_code, 200, response.text)
+        scores = get_session(self.client, session).json()["league_scores_by_round"][0][0]
+        self.assertEqual(scores["teamA"], "")
+
+    def test_batch_rejects_out_of_range_value(self):
+        session = create_round_robin_session(self.client, name="M11 Batch")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        batch = post_action(
+            self.client,
+            session,
+            "scores/batch",
+            {
+                "stage": "league",
+                "round_index": 0,
+                "updates": [
+                    {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 150},
+                ],
+            },
+        )
+        self.assertEqual(batch.status_code, 422, batch.text)
+
+
 if __name__ == "__main__":
     unittest.main()

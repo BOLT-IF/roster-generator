@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import unicodedata
 from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -427,7 +427,7 @@ class ScoreUpdateRequest(BaseModel):
     round_index: int
     court_index: int
     team_key: str
-    value: int | None = None
+    value: int | None = Field(default=None, ge=0, le=99)
 
 
 class BatchScoreUpdateRequest(BaseModel):
