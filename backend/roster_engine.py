@@ -53,6 +53,19 @@ def _select_resting_players(players, num_resting, must_rest, cannot_rest,
             resting.discard(p)
             still_needed += 1
 
+    if len(resting) < num_resting:
+        # Safety net: never return fewer resters than the round requires.
+        # Surplus "playing" players would silently vanish in the court
+        # builder - neither on a court nor resting. Completeness beats the
+        # consecutive-rest preference; any resulting rest-streak violation
+        # surfaces through the normal violation reporting instead.
+        shortfall = num_resting - len(resting)
+        fallback = sorted(
+            (p for p in players if p not in resting),
+            key=lambda p: (rest_counts[p], -consec_play[p]),
+        )
+        resting.update(fallback[:shortfall])
+
     return resting
 
 
@@ -255,6 +268,22 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
             fixed_pairs, fixed_pair_counts, pair_target,
             pairs_active, rng=rng,
         )
+
+        # Structural safety net: every player must appear exactly once per
+        # round - on a court or resting. A future engine change that breaks
+        # this invariant must fail loudly, not silently drop or duplicate
+        # players.
+        on_courts = [p for team_a, team_b in courts for p in list(team_a) + list(team_b)]
+        if (
+            len(on_courts) != num_courts * 4
+            or len(set(on_courts)) != len(on_courts)
+            or set(on_courts) & set(resting)
+            or set(on_courts) | set(resting) != set(players)
+        ):
+            raise RosterError(
+                f"Internal scheduling error: round {round_num} does not account "
+                "for every player exactly once. Please report this configuration."
+            )
 
         for p in resting:
             rest_counts[p] += 1
