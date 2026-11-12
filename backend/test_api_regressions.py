@@ -224,5 +224,79 @@ class BatchScoreFreshCourtTests(unittest.TestCase):
         self.assertTrue(ended.json()["ended_league_rounds"][0])
 
 
+class MemoryCacheVersionTests(unittest.TestCase):
+    """H-02: namespace bumps must change the cache key on the memory backend.
+
+    Previously incr() wrote to a private dict that get() never read, so every
+    bump was a no-op and stale entries were served until their TTL expired.
+    """
+
+    def test_bump_changes_cache_key_and_is_stable_between_bumps(self):
+        from cache import CacheManager, MemoryCacheBackend
+
+        manager = CacheManager()
+        manager._enabled = True
+        manager._backend = MemoryCacheBackend()
+
+        key_before = manager.build_key("players", "all")
+        manager.bump("players")
+        key_after_first_bump = manager.build_key("players", "all")
+        self.assertNotEqual(key_before, key_after_first_bump)
+
+        manager.bump("players")
+        key_after_second_bump = manager.build_key("players", "all")
+        self.assertNotEqual(key_after_second_bump, key_after_first_bump)
+
+    def test_bumped_namespace_stops_serving_cached_entries(self):
+        from cache import CacheManager, MemoryCacheBackend
+
+        manager = CacheManager()
+        manager._enabled = True
+        manager._backend = MemoryCacheBackend()
+
+        manager.set_json(manager.build_key("players", "all"), ["stale"], ttl_seconds=300)
+        self.assertEqual(manager.get_json(manager.build_key("players", "all")), ["stale"])
+
+        manager.bump("players")
+        self.assertIsNone(manager.get_json(manager.build_key("players", "all")))
+
+
+class MemoryCacheFreshnessTests(unittest.TestCase):
+    """H-02 (app level): with the memory cache active, a newly created player
+    must be visible to the very next GET instead of waiting out the TTL."""
+
+    def test_created_player_is_visible_immediately_with_memory_cache(self):
+        import uuid
+
+        from cache import MemoryCacheBackend
+
+        import app as app_module
+
+        probe_name = f"Cache Freshness Probe {uuid.uuid4().hex[:8]}"
+        original_enabled = app_module.cache._enabled
+        original_backend = app_module.cache._backend
+
+        client = TestClient(app)
+        client.__enter__()
+        app_module.cache._enabled = True
+        app_module.cache._backend = MemoryCacheBackend()
+        try:
+            # Warm the players cache with a first read.
+            first = client.get("/api/players")
+            self.assertEqual(first.status_code, 200, first.text)
+
+            created = client.post("/api/players", json={"full_name": probe_name, "short_name": probe_name})
+            self.assertEqual(created.status_code, 201, created.text)
+
+            listed = client.get("/api/players")
+            self.assertEqual(listed.status_code, 200, listed.text)
+            names = [player["full_name"] for player in listed.json()]
+            self.assertIn(probe_name, names)
+        finally:
+            app_module.cache._enabled = original_enabled
+            app_module.cache._backend = original_backend
+            client.__exit__(None, None, None)
+
+
 if __name__ == "__main__":
     unittest.main()

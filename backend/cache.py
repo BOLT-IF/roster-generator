@@ -27,7 +27,6 @@ def _env_flag(name: str, default: bool) -> bool:
 class MemoryCacheBackend:
     def __init__(self):
         self._values: dict[str, tuple[str, float | None]] = {}
-        self._versions: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def get(self, key: str) -> str | None:
@@ -51,9 +50,21 @@ class MemoryCacheBackend:
             self._values[key] = (value, None)
 
     def incr(self, key: str) -> int:
+        """Increment a counter, mirroring Redis INCR semantics.
+
+        The counter is stored in the same keyspace ``get`` reads from, so
+        version lookups (which go through ``get``) observe increments.
+        """
         with self._lock:
-            next_value = self._versions.get(key, 0) + 1
-            self._versions[key] = next_value
+            item = self._values.get(key)
+            current = 0
+            if item is not None:
+                try:
+                    current = int(item[0])
+                except (TypeError, ValueError):
+                    current = 0
+            next_value = current + 1
+            self._values[key] = (str(next_value), None)
             return next_value
 
 
