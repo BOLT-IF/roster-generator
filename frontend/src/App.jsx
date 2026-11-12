@@ -180,6 +180,7 @@ export default function App() {
   });
   const planner = usePlannerState({
     directoryPlayers: players.directoryPlayers,
+    directoryLoaded: players.directoryLoaded,
     navigateToPlanner: () => navigate(ROUTE_PATHS.planner),
   });
   const sessions = useSessionsData({

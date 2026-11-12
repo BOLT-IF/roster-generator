@@ -4,6 +4,7 @@ import { normalizePlayerDirectoryEntry } from "./appStateUtils";
 
 export default function usePlayersData({ onPlayerDeleted, refreshPlayerStats }) {
   const [directoryPlayers, setDirectoryPlayers] = useState([]);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
   const [playersLoading, setPlayersLoading] = useState(false);
   const [createPlayerLoading, setCreatePlayerLoading] = useState(false);
   const [updatePlayerLoading, setUpdatePlayerLoading] = useState(false);
@@ -23,6 +24,7 @@ export default function usePlayersData({ onPlayerDeleted, refreshPlayerStats }) 
     try {
       const list = await listPlayers();
       setDirectoryPlayers(list.map(normalizePlayerDirectoryEntry).filter(Boolean));
+      setDirectoryLoaded(true);
     } catch (error) {
       setDirectoryError(error.message);
     } finally {
@@ -108,6 +110,7 @@ export default function usePlayersData({ onPlayerDeleted, refreshPlayerStats }) 
 
   return {
     directoryPlayers,
+    directoryLoaded,
     playersLoading,
     createPlayerLoading,
     updatePlayerLoading,

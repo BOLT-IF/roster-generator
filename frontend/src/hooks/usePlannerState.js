@@ -16,7 +16,7 @@ import {
   writeStorage,
 } from "./appStateUtils";
 
-export default function usePlannerState({ directoryPlayers, navigateToPlanner }) {
+export default function usePlannerState({ directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
   const plannerState = useRef(readStorage(PLANNER_STORAGE_KEY, null)).current;
   const reviewStepRef = useRef(null);
 
@@ -50,7 +50,12 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
     })
     .filter(Boolean);
   const plannerRosterSignature = getPlannerRosterSignature(selectedPlayerIds, fixedPairIds, config, directoryPlayers);
-  const isRosterStale = Boolean(roster && rosterSignature && rosterSignature !== plannerRosterSignature);
+  // Until the directory has loaded, the signature is computed against an empty
+  // directory and would always differ from the saved one, so never call the
+  // roster stale before we can actually compare.
+  const isRosterStale = Boolean(
+    directoryLoaded && roster && rosterSignature && rosterSignature !== plannerRosterSignature
+  );
 
   const selectedEditSummary = (() => {
     if (!roster || !selectedRosterTarget) return "";
@@ -133,14 +138,16 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
   }, [directoryPlayers, fixedPairIds.length, plannerState, selectedPlayerIds.length]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const nextPlayersById = new Map(directoryPlayers.map((player) => [player.playerId, player]));
     const validSelectedIds = selectedPlayerIds.filter((playerId) => nextPlayersById.has(playerId));
     if (validSelectedIds.length !== selectedPlayerIds.length) {
       setSelectedPlayerIds(validSelectedIds);
     }
-  }, [directoryPlayers, selectedPlayerIds]);
+  }, [directoryLoaded, directoryPlayers, selectedPlayerIds]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const selectedIdSet = new Set(selectedPlayerIds);
     const validPairs = fixedPairIds.filter(
       ([firstId, secondId]) =>
@@ -151,9 +158,10 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
     if (validPairs.length !== fixedPairIds.length) {
       setFixedPairIds(validPairs);
     }
-  }, [fixedPairIds, selectedPlayerIds]);
+  }, [directoryLoaded, fixedPairIds, selectedPlayerIds]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const nextPlayersById = new Map(directoryPlayers.map((player) => [player.playerId, player]));
     const selectedShortNameSet = new Set(
       selectedPlayerIds
@@ -169,7 +177,7 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
       }
       return { ...current, limits: nextLimits };
     });
-  }, [directoryPlayers, selectedPlayerIds]);
+  }, [directoryLoaded, directoryPlayers, selectedPlayerIds]);
 
   async function handleGenerate() {
     if (hasManualRosterEdits && typeof window !== "undefined") {
