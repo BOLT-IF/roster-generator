@@ -194,20 +194,16 @@ class RosterRequest(BaseModel):
 
     @field_validator("pair_games")
     @classmethod
-    def pair_games_in_range(cls, v):
+    def pair_games_at_least_one(cls, v):
         if v < 1:
             raise ValueError("pair_games must be at least 1")
-        if v > 20:
-            raise ValueError("pair_games must be at most 20")
         return v
 
     @field_validator("pair_start_round")
     @classmethod
-    def pair_start_round_in_range(cls, v):
+    def pair_start_round_at_least_one(cls, v):
         if v < 1:
             raise ValueError("pair_start_round must be at least 1")
-        if v > 99:
-            raise ValueError("pair_start_round must be at most 99")
         return v
 
     @field_validator("max_consecutive_rest")
