@@ -27,7 +27,11 @@ function rankStandings(entries) {
       return statsB.pointDifference - statsA.pointDifference;
     }
     if (statsB.wins !== statsA.wins) return statsB.wins - statsA.wins;
-    return nameA.localeCompare(nameB);
+    // Case-insensitive final tie-break, matching the server's ranking
+    // (localeCompare was locale-dependent and could diverge from it).
+    const a = nameA.toLowerCase();
+    const b = nameB.toLowerCase();
+    return a < b ? -1 : a > b ? 1 : 0;
   });
 }
 

@@ -1003,6 +1003,9 @@ def _rank_stats_entries(entries):
             -item[1]["points"],
             -item[1]["point_difference"],
             -item[1]["wins"],
+            # Case-insensitive final tie-break, matching the UI's ranking;
+            # the raw string is a secondary key for full determinism.
+            item[0].casefold(),
             item[0],
         ),
     )

@@ -1387,5 +1387,31 @@ class QualifierNormalizationTests(unittest.TestCase):
         self.assertEqual(ended.status_code, 200, ended.text)
 
 
+class TieBreakAlignmentTests(unittest.TestCase):
+    """M-10a: the final standings tie-break must match the UI's.
+
+    The server broke full ties with raw Python string comparison (uppercase
+    first: 'Beta' before 'alpha'), while the UI used localeCompare - so the
+    server could seed different semifinalists than the scorers saw ranked
+    on screen. Both sides now break ties case-insensitively.
+    """
+
+    def test_final_tiebreak_is_case_insensitive(self):
+        from app import _rank_stats_entries
+
+        entries = [
+            ("Beta & One", {"points": 10, "point_difference": 5, "wins": 3}),
+            ("alpha & Two", {"points": 10, "point_difference": 5, "wins": 3}),
+            ("Gamma & Three", {"points": 12, "point_difference": 5, "wins": 4}),
+        ]
+        ranked = [name for name, _ in _rank_stats_entries(entries)]
+        self.assertEqual(ranked[0], "Gamma & Three", "higher points must rank first")
+        self.assertEqual(
+            ranked[1:],
+            ["alpha & Two", "Beta & One"],
+            "case-insensitive order expected: raw string order puts 'Beta & One' first",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
