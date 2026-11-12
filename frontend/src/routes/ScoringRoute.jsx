@@ -11,6 +11,7 @@ export default function ScoringRoute({ scoring }) {
       drawConfig={currentSession.drawConfig}
       sessionName={currentSession.name}
       canEdit={currentSession.canEdit}
+      invalidEditLink={scoring.invalidEditLink}
       leagueScoresByRound={currentSession.leagueScoresByRound}
       activeLeagueRound={currentSession.activeLeagueRound}
       endedLeagueRounds={currentSession.endedLeagueRounds}

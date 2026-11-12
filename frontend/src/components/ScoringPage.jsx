@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { formatSessionPill, scoringCopy } from "../content/uiCopy";
 import {
   areEndedRoundsComplete,
   buildIndividualStandings,
@@ -604,6 +605,7 @@ export default function ScoringPage({
   drawConfig,
   sessionName,
   canEdit,
+  invalidEditLink = false,
   leagueScoresByRound,
   activeLeagueRound,
   endedLeagueRounds,
@@ -714,7 +716,7 @@ export default function ScoringPage({
               Start each round when you are ready, enter scores court by court, and end the round to lock results and refresh the rankings. When league play is complete, playoff rounds are seeded automatically from the pair table.
             </p>
             <p className="mt-3 inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold tracking-wide text-white">
-              Session {sessionName}
+              {formatSessionPill(sessionName)}
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -743,6 +745,25 @@ export default function ScoringPage({
           </div>
         </div>
       </div>
+
+      {invalidEditLink ? (
+        <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {scoringCopy.invalidEditLink}
+        </div>
+      ) : null}
+
+      {canEdit && activeLeagueRound + 1 < leagueRounds.length && liveLeagueRounds.length === 0 ? (
+        <div className="md:hidden">
+          <button
+            type="button"
+            onClick={() => onStartRound("league", activeLeagueRound + 1)}
+            disabled={Boolean(pendingRoundAction)}
+            className="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
+          >
+            {scoringCopy.startNextRound}
+          </button>
+        </div>
+      ) : null}
 
       <PanelTabs
         activePanel={activePanel}
