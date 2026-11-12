@@ -356,5 +356,53 @@ class ReopenedSessionStatsTests(unittest.TestCase):
         )
 
 
+class UnseededGenerateFreshnessTests(unittest.TestCase):
+    """M-09: unseeded /api/generate must not return the identical cached roster.
+
+    The endpoint cached responses by request fingerprint for a full hour, so
+    two identical unseeded requests (the planner's Regenerate button) returned
+    byte-identical rosters while the UI promised 'leave empty for random'.
+    """
+
+    def test_unseeded_generations_differ_and_seeded_stay_deterministic(self):
+        import app as app_module
+        from cache import MemoryCacheBackend
+
+        original_enabled = app_module.cache._enabled
+        original_backend = app_module.cache._backend
+
+        client = TestClient(app)
+        client.__enter__()
+        app_module.cache._enabled = True
+        app_module.cache._backend = MemoryCacheBackend()
+        try:
+            base = {
+                "players": ["A", "B", "C", "D", "E", "F", "G", "H"],
+                "fixed_pairs": [],
+                "num_courts": 2,
+                "court_numbers": ["1", "2"],
+                "rounds": 3,
+                "limits": {},
+                "pair_games": 1,
+                "pair_start_round": 5,
+                "max_consecutive_rest": 1,
+            }
+
+            first = client.post("/api/generate", json=base)
+            second = client.post("/api/generate", json=base)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(second.status_code, 200, second.text)
+            self.assertNotEqual(first.json(), second.json())
+
+            seeded_one = client.post("/api/generate", json={**base, "seed": 1})
+            seeded_two = client.post("/api/generate", json={**base, "seed": 1})
+            self.assertEqual(seeded_one.status_code, 200, seeded_one.text)
+            self.assertEqual(seeded_one.json(), seeded_two.json())
+        finally:
+            app_module.cache._enabled = original_enabled
+            app_module.cache._backend = original_backend
+            client.__exit__(None, None, None)
+
+
 if __name__ == "__main__":
     unittest.main()
