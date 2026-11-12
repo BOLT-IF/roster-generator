@@ -50,6 +50,8 @@ export default function useScoringSession({
   const [loadingLabel, setLoadingLabel] = useState("Syncing shared session...");
   const [pendingRoundAction, setPendingRoundAction] = useState(null);
   const [pageError, setPageError] = useState(null);
+  // Set when the session behind the current route could not be loaded.
+  const [sessionLoadError, setSessionLoadError] = useState(null);
 
   useEffect(() => {
     if (currentSession) {
@@ -70,6 +72,7 @@ export default function useScoringSession({
     setLoadingLabel("Opening shared session...");
     setLoading(true);
     setPageError(null);
+    setSessionLoadError(null);
     fetchSharedSession(routeSessionId, routeEditToken)
       .then((session) => {
         const normalized = mergePendingScoreEdits(normalizeSession(session), pendingScoreEditsRef.current);
@@ -77,7 +80,10 @@ export default function useScoringSession({
         setCurrentSession(normalized);
       })
       .catch((error) => {
-        setPageError(error.message);
+        // A failed load must not leave a previously opened (editable) session on screen.
+        pendingScoreEditsRef.current = {};
+        setCurrentSession(null);
+        setSessionLoadError({ sessionId: routeSessionId, message: error.message });
       })
       .finally(() => setLoading(false));
   }, [rememberSessionAccess, routeEditToken, routeSessionId, view]);
@@ -395,6 +401,7 @@ export default function useScoringSession({
     sessionLoadingLabel: loadingLabel,
     pendingRoundAction,
     pageError,
+    sessionLoadError,
     openSession,
     handleStartRound,
     handleEndRound,
