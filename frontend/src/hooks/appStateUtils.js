@@ -418,9 +418,12 @@ export function normalizeSession(session) {
     ...normalized,
     knockoutScoresByRound: knockoutRounds.map((round, roundIndex) => {
       const existingScores = normalized.knockoutScoresByRound[roundIndex];
-      return existingScores && existingScores.length === round.courts.length
-        ? existingScores
-        : createScoresForRounds([round])[0];
+      if (!Array.isArray(existingScores)) return createScoresForRounds([round])[0];
+      if (existingScores.length === round.courts.length) return existingScores;
+      // Clamp to the round's real court count: drop phantom rows beyond it and
+      // pad missing ones, but keep every real score that is already stored.
+      const emptyRow = createScoresForRounds([round])[0];
+      return round.courts.map((_, courtIndex) => existingScores[courtIndex] ?? emptyRow[courtIndex]);
     }),
     activeKnockoutRound:
       normalized.activeKnockoutRound > knockoutRounds.length - 1
