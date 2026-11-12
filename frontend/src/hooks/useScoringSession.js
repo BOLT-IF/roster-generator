@@ -69,47 +69,79 @@ export default function useScoringSession({
   useEffect(() => {
     if (view !== "scoring" || !routeSessionId) return;
 
+    // Aborted when the route session changes or the view unmounts, so a slow
+    // response for one session can never render under another session's URL.
+    const controller = new AbortController();
+    const { signal } = controller;
+
     setLoadingLabel("Opening shared session...");
     setLoading(true);
     setPageError(null);
     setSessionLoadError(null);
-    fetchSharedSession(routeSessionId, routeEditToken)
+    fetchSharedSession(routeSessionId, routeEditToken, { signal })
       .then((session) => {
+        if (signal.aborted) return;
         const normalized = mergePendingScoreEdits(normalizeSession(session), pendingScoreEditsRef.current);
         rememberSessionAccess(normalized.sessionId, normalized.editToken);
         setCurrentSession(normalized);
       })
       .catch((error) => {
+        if (signal.aborted) return;
         // A failed load must not leave a previously opened (editable) session on screen.
         pendingScoreEditsRef.current = {};
         setCurrentSession(null);
         setSessionLoadError({ sessionId: routeSessionId, message: error.message });
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!signal.aborted) setLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+      setLoading(false);
+    };
   }, [rememberSessionAccess, routeEditToken, routeSessionId, view]);
 
   useEffect(() => {
     if (!currentSession?.sessionId) return;
 
+    const { sessionId, editToken, version } = currentSession;
+    const controller = new AbortController();
+    const { signal } = controller;
+    // At most one poll in flight per effect run; ticks that arrive meanwhile are skipped.
+    let pollInFlight = false;
+
     const intervalId = window.setInterval(async () => {
+      if (pollInFlight) return;
       if (Object.keys(pendingScoreEditsRef.current).length > 0) return;
       if (Date.now() - lastLocalEditAtRef.current < ACTIVE_EDIT_GRACE_MS) return;
 
+      pollInFlight = true;
       try {
         const latest = mergePendingScoreEdits(
-          normalizeSession(await fetchSharedSession(currentSession.sessionId, currentSession.editToken)),
+          normalizeSession(await fetchSharedSession(sessionId, editToken, { signal })),
           pendingScoreEditsRef.current
         );
-        if (latest.version !== currentSession.version) {
+        if (signal.aborted) return;
+        // Only a strictly newer version may replace local state; a delayed older
+        // response must never roll the session back.
+        if (latest.version > version) {
           rememberSessionAccess(latest.sessionId, latest.editToken);
-          setCurrentSession(latest);
+          setCurrentSession((current) =>
+            current && current.sessionId === latest.sessionId && latest.version > current.version ? latest : current
+          );
         }
       } catch {
         // Keep local state; next successful poll will resync.
+      } finally {
+        pollInFlight = false;
       }
     }, SESSION_POLL_INTERVAL_MS);
 
-    return () => window.clearInterval(intervalId);
+    return () => {
+      controller.abort();
+      window.clearInterval(intervalId);
+    };
   }, [currentSession?.editToken, currentSession?.sessionId, currentSession?.version, rememberSessionAccess]);
 
   function enqueueScoreMutation(task) {
