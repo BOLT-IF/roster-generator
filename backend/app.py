@@ -646,7 +646,12 @@ def _find_name_conflict(
 def _find_soft_deleted_player_for_restore(db, normalized_full_name: str, normalized_short_name: str) -> PlayerRecord | None:
     matches = []
     for player in db.scalars(select(PlayerRecord).where(PlayerRecord.is_deleted.is_(True))).all():
-        if _player_uses_name(player, normalized_full_name) or _player_uses_name(player, normalized_short_name):
+        # Restore only when the request matches the deleted player's CURRENT
+        # full name (the documented recreate contract - a fresh short name is
+        # allowed and rebrands the player). Old aliases and short-only matches
+        # must NOT restore: they silently rebranded the deleted player
+        # whenever a new person reused one of those names.
+        if player.normalized_full_name == normalized_full_name:
             matches.append(player)
 
     if not matches:
@@ -2062,8 +2067,42 @@ def create_player(req: PlayerCreateRequest):
 
         soft_deleted_player = _find_soft_deleted_player_for_restore(db, normalized_full_name, normalized_short_name)
         if soft_deleted_player:
+            restore_short_conflict = _find_name_conflict(
+                db,
+                normalized_short_name,
+                exclude_player_id=soft_deleted_player.player_id,
+                include_deleted=True,
+            )
+            if restore_short_conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A deleted player still holds this short name. Recreate that player "
+                        "with the same full and short name to restore it, or pick another name."
+                    ),
+                )
             player = _restore_deleted_player(db, soft_deleted_player, req.full_name, req.short_name)
         else:
+            deleted_full = _find_name_conflict(db, normalized_full_name, include_deleted=True)
+            if deleted_full:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A deleted player still holds this full name. Recreate that player "
+                        "with the same full and short name to restore it, or pick another name."
+                    ),
+                )
+
+            deleted_short = _find_name_conflict(db, normalized_short_name, include_deleted=True)
+            if deleted_short:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A deleted player still holds this short name. Recreate that player "
+                        "with the same full and short name to restore it, or pick another name."
+                    ),
+                )
+
             player = _create_player_record(db, req.full_name, req.short_name, source="manual")
         response = _serialize_player(player)
         _invalidate_player_views()
