@@ -1,3 +1,19 @@
+function CollapsibleSummary({ title, hint }) {
+  return (
+    <summary className="flex min-h-[72px] cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
+      <div>
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-700">{title}</h3>
+        <p className="mt-1 text-xs text-gray-400">{hint}</p>
+      </div>
+      <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-500 transition-transform group-open:rotate-180">
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </span>
+    </summary>
+  );
+}
+
 export default function RosterTable({
   data,
   fixedPairs,
@@ -130,22 +146,6 @@ export default function RosterTable({
         <span className="block">{label}</span>
         {selected ? <span className="mt-1 block text-[10px] font-semibold uppercase tracking-wide">Selected</span> : null}
       </button>
-    );
-  }
-
-  function CollapsibleSummary({ title, hint }) {
-    return (
-      <summary className="flex min-h-[72px] cursor-pointer list-none items-center justify-between gap-3 px-5 py-4">
-        <div>
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-700">{title}</h3>
-          <p className="mt-1 text-xs text-gray-400">{hint}</p>
-        </div>
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-500 transition-transform group-open:rotate-180">
-          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </span>
-      </summary>
     );
   }
 

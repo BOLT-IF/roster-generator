@@ -227,6 +227,8 @@ export default function App() {
   });
 
   useEffect(() => {
+    // Intentional: reset transient UI state whenever the route changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMobileNavOpen(false);
     sessions.clearPageError();
     scoring.clearPageError();

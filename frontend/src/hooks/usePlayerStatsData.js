@@ -44,7 +44,7 @@ export default function usePlayerStatsData({ view }) {
       return;
     }
     void loadPlayerStatsDetail(selectedPlayer, detailRequestIdRef.current);
-  }, [selectedPlayer, view]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedPlayer, view]);
 
   async function loadPlayerStats() {
     setPlayerStatsLoading(true);

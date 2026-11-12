@@ -171,13 +171,14 @@ export default function useScoringSession({
       document.removeEventListener("visibilitychange", handleVisibility);
       stopPolling();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     pollingActive,
     currentSession?.editToken,
     currentSession?.sessionId,
     currentSession?.version,
     rememberSessionAccess,
-  ]);  // eslint-disable-line react-hooks/exhaustive-deps
+  ]);
 
   function enqueueScoreMutation(task) {
     const nextOperation = scoreMutationQueueRef.current.then(task, task);
