@@ -1686,5 +1686,66 @@ class PlayerIdEntropyTests(unittest.TestCase):
         )
 
 
+class CompletedAtPersistenceTests(unittest.TestCase):
+    """L-07a.2: a session's completed_at is stamped once and never drifts.
+
+    completed_at was taken from record.updated_at on every stats sync, so
+    any later mutation - even a rename - reshuffled history ordering.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_completed_at_survives_later_mutations(self):
+        import time
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        session = create_round_robin_session(self.client, name=f"Stamp {tag}")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamB", "value": 15},
+        )
+        ended = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+        def history_entry():
+            history = self.client.get("/api/history/sessions")
+            self.assertEqual(history.status_code, 200, history.text)
+            return next(item for item in history.json() if item["session_id"] == session["session_id"])
+
+        first = history_entry()["completed_at"]
+
+        time.sleep(1.1)
+        renamed = self.client.post(
+            f"/api/sessions/{session['session_id']}/rename",
+            params={"edit_token": session["edit_token"]},
+            json={"name": f"Stamp Renamed {tag}"},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+
+        second = history_entry()["completed_at"]
+        self.assertEqual(
+            first,
+            second,
+            "completed_at must be stamped once; a rename must not shift it",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

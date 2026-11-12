@@ -1497,7 +1497,25 @@ def _sync_completed_session_stats(db, record: SharedSessionRecord, payload: dict
         pair_standings = _build_pair_standings(league_rounds, league_scores)
         champion_pair = pair_standings[0][0] if pair_standings else None
 
-    completed_at = record.updated_at
+    # Stamp completion once and reuse it: taking updated_at on every sync
+    # made any later mutation (even a rename) shift the session's position
+    # in history. The stamp is written through the live payload on the
+    # write path (first completion always happens via end-round).
+    completed_at_value = payload.get("completed_at")
+    if isinstance(completed_at_value, str):
+        try:
+            completed_at = datetime.fromisoformat(completed_at_value)
+        except ValueError:
+            completed_at = record.updated_at
+    else:
+        completed_at = record.updated_at
+        if completion_state["completed"]:
+            stamp = completed_at.isoformat()
+            payload["completed_at"] = stamp
+            # db.refresh in _update_session_record replaces record.data with
+            # a freshly deserialized dict, so the stamp must be written onto
+            # the record itself (a plain in-place payload edit is lost).
+            record.data = dict(record.data or {}, completed_at=stamp)
     draw_type = payload.get("draw_config", {}).get("draw_type", "round_robin")
 
     db.add(
