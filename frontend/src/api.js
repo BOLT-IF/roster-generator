@@ -29,7 +29,9 @@ export function formatApiErrorDetail(detail, fallback) {
 
 async function buildApiError(res) {
   const body = await res.json().catch(() => ({ detail: "Server error" }));
-  return new Error(formatApiErrorDetail(body?.detail, `HTTP ${res.status}`));
+  const error = new Error(formatApiErrorDetail(body?.detail, `HTTP ${res.status}`));
+  error.status = res.status;
+  return error;
 }
 
 function withEditToken(path, editToken) {

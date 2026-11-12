@@ -36,6 +36,7 @@ export default function useScoringSession({
   const pendingScoreEditsRef = useRef({});
   const scoreMutationQueueRef = useRef(Promise.resolve());
   const lastLocalEditAtRef = useRef(0);
+  const goneSessionIdRef = useRef(null);
   const previousNonScoringPathRef = useRef(ROUTE_PATHS.planner);
 
   const [currentSession, setCurrentSession] = useState(() => {
@@ -82,6 +83,7 @@ export default function useScoringSession({
       .then((session) => {
         if (signal.aborted) return;
         const normalized = mergePendingScoreEdits(normalizeSession(session), pendingScoreEditsRef.current);
+        goneSessionIdRef.current = null;
         rememberSessionAccess(normalized.sessionId, normalized.editToken);
         setCurrentSession(normalized);
       })
@@ -102,17 +104,34 @@ export default function useScoringSession({
     };
   }, [rememberSessionAccess, routeEditToken, routeSessionId, view]);
 
+  // Poll only while the scoring page for this session is on screen, never for a
+  // session the server reports as gone, and not while the tab is hidden.
+  const pollingActive = Boolean(
+    view === "scoring" && currentSession?.sessionId && currentSession.sessionId === routeSessionId
+  );
+
   useEffect(() => {
-    if (!currentSession?.sessionId) return;
+    if (!pollingActive || !currentSession?.sessionId) return;
 
     const { sessionId, editToken, version } = currentSession;
+    // A 404 is terminal for this session id; do not restart polling on re-render.
+    if (goneSessionIdRef.current === sessionId) return;
+
     const controller = new AbortController();
     const { signal } = controller;
     // At most one poll in flight per effect run; ticks that arrive meanwhile are skipped.
     let pollInFlight = false;
+    let intervalId = null;
 
-    const intervalId = window.setInterval(async () => {
+    const stopPolling = () => {
+      controller.abort();
+      if (intervalId !== null) window.clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    const poll = async () => {
       if (pollInFlight) return;
+      if (document.hidden) return;
       if (Object.keys(pendingScoreEditsRef.current).length > 0) return;
       if (Date.now() - lastLocalEditAtRef.current < ACTIVE_EDIT_GRACE_MS) return;
 
@@ -131,18 +150,34 @@ export default function useScoringSession({
             current && current.sessionId === latest.sessionId && latest.version > current.version ? latest : current
           );
         }
-      } catch {
-        // Keep local state; next successful poll will resync.
+      } catch (error) {
+        if (error?.status === 404) {
+          goneSessionIdRef.current = sessionId;
+          stopPolling();
+        }
+        // Any other failure keeps local state; the next successful poll will resync.
       } finally {
         pollInFlight = false;
       }
-    }, SESSION_POLL_INTERVAL_MS);
+    };
+
+    intervalId = window.setInterval(poll, SESSION_POLL_INTERVAL_MS);
+    const handleVisibility = () => {
+      if (!document.hidden) poll();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
-      controller.abort();
-      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopPolling();
     };
-  }, [currentSession?.editToken, currentSession?.sessionId, currentSession?.version, rememberSessionAccess]);
+  }, [
+    pollingActive,
+    currentSession?.editToken,
+    currentSession?.sessionId,
+    currentSession?.version,
+    rememberSessionAccess,
+  ]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function enqueueScoreMutation(task) {
     const nextOperation = scoreMutationQueueRef.current.then(task, task);
