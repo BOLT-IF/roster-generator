@@ -13,6 +13,7 @@ export default function RosterTable({
   onTapTeam,
   onTapRound,
   editLoading = false,
+  expectedRepeatCount = 0,
 }) {
   if (!data) return null;
 
@@ -433,6 +434,14 @@ export default function RosterTable({
           {violations.length === 0 && (
             <div className="rounded-xl border border-green-200 bg-green-50 p-5">
               <p className="text-sm font-medium text-green-700">All constraints satisfied.</p>
+            </div>
+          )}
+
+          {expectedRepeatCount > 0 && (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-5">
+              <p className="text-sm text-indigo-800">
+                Play Twice: each pair meets every other pair twice, so {expectedRepeatCount} repeat matchup{expectedRepeatCount === 1 ? " is" : "s are"} expected and not counted as violations.
+              </p>
             </div>
           )}
         </div>

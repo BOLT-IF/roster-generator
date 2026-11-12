@@ -162,39 +162,43 @@ export default function AppShell({
             })}
           </nav>
 
-          {mobileNavOpen ? (
-            <div className="md:hidden">
-              <div className="fixed inset-0 z-40 bg-slate-900/35" onClick={onCloseMobileNav} aria-hidden="true" />
-              <nav
-                id="mobile-global-nav"
-                className="fixed inset-x-4 top-[6.5rem] z-50 rounded-3xl border border-gray-200 bg-white p-3 shadow-2xl"
-              >
-                <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.24em] text-gray-400">Navigate</p>
-                <div className="grid gap-2">
-                  {navItems.map((item) => {
-                    const isActive = view === item.key;
-                    return (
-                      <button
-                        key={item.key}
-                        type="button"
-                        onClick={() => onNavigate(item.key)}
-                        className={`flex min-h-12 items-center rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-colors ${
-                          isActive
-                            ? "bg-indigo-600 text-white"
-                            : "bg-gray-50 text-gray-700 hover:bg-gray-100"
-                        }`}
-                      >
-                        <NavIcon kind={item.icon} className="mr-3 h-4 w-4" />
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </nav>
-            </div>
-          ) : null}
         </div>
       </header>
+
+      {/* Rendered outside <header>: its backdrop-blur makes it the containing block for
+          fixed descendants, which clipped the backdrop to the header's own box. */}
+      {mobileNavOpen ? (
+        <div className="md:hidden">
+          {/* z-30 keeps the header (z-40) and its menu toggle reachable above the backdrop. */}
+          <div className="fixed inset-0 z-30 bg-slate-900/35" onClick={onCloseMobileNav} aria-hidden="true" />
+          <nav
+            id="mobile-global-nav"
+            className="fixed inset-x-4 top-[6.5rem] z-50 rounded-3xl border border-gray-200 bg-white p-3 shadow-2xl"
+          >
+            <p className="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.24em] text-gray-400">Navigate</p>
+            <div className="grid gap-2">
+              {navItems.map((item) => {
+                const isActive = view === item.key;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => onNavigate(item.key)}
+                    className={`flex min-h-12 items-center rounded-2xl px-4 py-3 text-left text-sm font-semibold transition-colors ${
+                      isActive
+                        ? "bg-indigo-600 text-white"
+                        : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+                    }`}
+                  >
+                    <NavIcon kind={item.icon} className="mr-3 h-4 w-4" />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        </div>
+      ) : null}
 
       <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
     </div>

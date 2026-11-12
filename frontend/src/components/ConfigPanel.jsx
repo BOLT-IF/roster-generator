@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getLeagueKnockoutCourts, getLeagueKnockoutIssue, withCourtCount } from "../hooks/appStateUtils";
 
 const DRAW_FORMATS = [
   {
@@ -12,6 +13,51 @@ const DRAW_FORMATS = [
     description: "Play league rounds first, then promote the top-ranked pairs into playoffs.",
   },
 ];
+
+function NumericField({ fieldKey, label, min, max, hint, value, onAdjust, onDraftChange, onCommit }) {
+  return (
+    <div>
+      <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">
+        {label}
+        <span className="relative group">
+          <svg className="w-3.5 h-3.5 text-gray-400 hover:text-indigo-500 transition-colors cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 text-xs text-white bg-gray-800 rounded-md shadow-lg whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-20">
+            {hint}
+          </span>
+        </span>
+      </label>
+      <div className="flex items-stretch gap-2">
+        <button
+          type="button"
+          onClick={() => onAdjust(fieldKey, min, max, -1)}
+          className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+          aria-label={`Decrease ${label}`}
+        >
+          -
+        </button>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => onDraftChange(fieldKey, e.target.value)}
+          onBlur={() => onCommit(fieldKey, min, max)}
+          className="w-full rounded-lg border border-gray-300 px-3 py-3 text-center text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <button
+          type="button"
+          onClick={() => onAdjust(fieldKey, min, max, 1)}
+          className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+          aria-label={`Increase ${label}`}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function ConfigPanel({ config, setConfig, players, fixedPairs }) {
   const [limitPlayer, setLimitPlayer] = useState("");
@@ -187,51 +233,6 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
     update("limits", next);
   }
 
-  function NumericField({ fieldKey, label, min, max, hint }) {
-    return (
-      <div>
-        <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">
-          {label}
-          <span className="relative group">
-            <svg className="w-3.5 h-3.5 text-gray-400 hover:text-indigo-500 transition-colors cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 text-xs text-white bg-gray-800 rounded-md shadow-lg whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-20">
-              {hint}
-            </span>
-          </span>
-        </label>
-        <div className="flex items-stretch gap-2">
-          <button
-            type="button"
-            onClick={() => adjustNumericValue(fieldKey, min, max, -1)}
-            className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg font-semibold text-gray-700 transition-colors hover:bg-gray-50"
-            aria-label={`Decrease ${label}`}
-          >
-            -
-          </button>
-          <input
-            type="number"
-            min={min}
-            max={max}
-            value={draftValues[fieldKey]}
-            onChange={(e) => updateNumericDraft(fieldKey, e.target.value)}
-            onBlur={() => commitNumericValue(fieldKey, min, max)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-3 text-center text-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <button
-            type="button"
-            onClick={() => adjustNumericValue(fieldKey, min, max, 1)}
-            className="inline-flex min-h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg font-semibold text-gray-700 transition-colors hover:bg-gray-50"
-            aria-label={`Increase ${label}`}
-          >
-            +
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const fields = [
     { key: "num_courts", label: "Courts", min: 1, max: 20, hint: "Number of courts available at the venue" },
     ...(config.draw_type === "round_robin"
@@ -250,6 +251,31 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
   const courtNumbers = config.court_numbers || [];
   const derivedLeagueRounds = getDerivedLeagueRounds();
   const derivedPairGames = getDerivedPairGames();
+  const leagueKnockoutIssue = getLeagueKnockoutIssue({
+    drawType: config.draw_type,
+    playerCount: players.length,
+    pairCount: fixedPairs.length,
+  });
+  const leagueKnockoutCourts = getLeagueKnockoutCourts(fixedPairs.length);
+
+  // League + Knockout plays pairs / 2 matches per round, so courts are not a free
+  // choice: keep them in step with the pair count (and when the draw type changes).
+  useEffect(() => {
+    if (config.draw_type !== "league_knockout") return;
+    if (leagueKnockoutCourts >= 1 && config.num_courts !== leagueKnockoutCourts) {
+      setConfig((prev) => withCourtCount(prev, leagueKnockoutCourts));
+    }
+  }, [config.draw_type, config.num_courts, leagueKnockoutCourts, setConfig]);
+
+  // Round Robin: never keep more courts than the selected players can fill
+  // (4 players per court); the backend rejects that at Generate time.
+  const maxPlayableCourts = Math.floor(players.length / 4);
+  useEffect(() => {
+    if (config.draw_type === "league_knockout") return;
+    if (maxPlayableCourts >= 1 && config.num_courts > maxPlayableCourts) {
+      setConfig((prev) => withCourtCount(prev, maxPlayableCourts));
+    }
+  }, [config.draw_type, config.num_courts, maxPlayableCourts, setConfig]);
 
   useEffect(() => {
     if (config.draw_type !== "league_knockout") return;
@@ -305,6 +331,17 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
           <span className="font-medium text-gray-800">Preview:</span> {formatPreview()}
         </div>
       </div>
+
+      {config.draw_type === "league_knockout" && leagueKnockoutIssue ? (
+        <div role="alert" className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {leagueKnockoutIssue}
+        </div>
+      ) : null}
+      {config.draw_type === "league_knockout" && !leagueKnockoutIssue ? (
+        <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
+          League + Knockout uses {leagueKnockoutCourts} court{leagueKnockoutCourts === 1 ? "" : "s"} for {fixedPairs.length} fixed pairs (one match per court each round).
+        </div>
+      ) : null}
 
       {config.draw_type === "league_knockout" && (
         <div className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -386,7 +423,18 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
 
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {primaryFields.map(({ key, label, min, max, hint }) => (
-          <NumericField key={key} fieldKey={key} label={label} min={min} max={max} hint={hint} />
+          <NumericField
+            key={key}
+            fieldKey={key}
+            label={label}
+            min={min}
+            max={max}
+            hint={hint}
+            value={draftValues[key]}
+            onAdjust={adjustNumericValue}
+            onDraftChange={updateNumericDraft}
+            onCommit={commitNumericValue}
+          />
         ))}
       </div>
 
@@ -406,7 +454,18 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
         <div className="mt-4 space-y-5 border-t border-gray-200 pt-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {advancedFields.map(({ key, label, min, max, hint }) => (
-              <NumericField key={key} fieldKey={key} label={label} min={min} max={max} hint={hint} />
+              <NumericField
+                key={key}
+                fieldKey={key}
+                label={label}
+                min={min}
+                max={max}
+                hint={hint}
+                value={draftValues[key]}
+                onAdjust={adjustNumericValue}
+                onDraftChange={updateNumericDraft}
+                onCommit={commitNumericValue}
+              />
             ))}
             <div>
               <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">

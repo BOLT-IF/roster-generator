@@ -12,12 +12,18 @@ export function isScoreComplete(score) {
   return score.teamA !== "" && score.teamB !== "";
 }
 
-export function getMatchWinner(score, court) {
-  if (!isScoreComplete(score) || score.teamA === score.teamB) {
-    return null;
-  }
+// Scores can be raw strings (typed in an input) or numbers (from the server);
+// always compare them numerically so "21" beats "9".
+export function scoreDifference(score) {
+  return Number(score.teamA) - Number(score.teamB);
+}
 
-  return score.teamA > score.teamB ? court.team_a : court.team_b;
+export function getMatchWinner(score, court) {
+  if (!isScoreComplete(score)) return null;
+  const diff = scoreDifference(score);
+  if (Number.isNaN(diff) || diff === 0) return null;
+
+  return diff > 0 ? court.team_a : court.team_b;
 }
 
 function rankStandings(entries) {
@@ -56,16 +62,16 @@ export function buildPairStandings(rounds, scoresByRound) {
 
       const teamAStats = standings.get(teamAKey);
       const teamBStats = standings.get(teamBKey);
-      const pointDelta = score.teamA - score.teamB;
+      const pointDelta = scoreDifference(score);
 
       teamAStats.played += 1;
       teamBStats.played += 1;
       teamAStats.pointDifference += pointDelta;
       teamBStats.pointDifference -= pointDelta;
 
-      if (score.teamA === score.teamB) return;
+      if (pointDelta === 0) return;
 
-      if (score.teamA > score.teamB) {
+      if (pointDelta > 0) {
         teamAStats.points += 2;
         teamAStats.wins += 1;
         teamBStats.losses += 1;
@@ -88,7 +94,7 @@ export function buildIndividualStandings(rounds, scoresByRound) {
       const score = scoresByRound[roundIndex]?.[courtIndex];
       if (!isScoreComplete(score)) return;
 
-      const pointDelta = score.teamA - score.teamB;
+      const pointDelta = scoreDifference(score);
       const winningTeam = getMatchWinner(score, court);
       const losingTeam =
         winningTeam === court.team_a ? court.team_b : winningTeam === court.team_b ? court.team_a : null;

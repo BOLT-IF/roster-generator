@@ -265,3 +265,16 @@ export const playerStatsPageCopy = {
       "Once enough completed matches are available, the strongest partnerships will show up here.",
   },
 };
+
+export const scoringCopy = {
+  invalidEditLink: "This edit link is not valid, so the session opened in view-only mode. Ask the organiser for a fresh scorer link.",
+  startNextRound: "Start Next Round",
+};
+
+// "Session {name}" would read "Session Session Night" when the name already starts
+// with the word, so only add the prefix when it is missing.
+export function formatSessionPill(name) {
+  const trimmed = String(name ?? "").trim();
+  if (/^session\b/i.test(trimmed)) return trimmed;
+  return `Session ${trimmed}`;
+}

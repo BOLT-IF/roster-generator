@@ -180,6 +180,7 @@ export default function App() {
   });
   const planner = usePlannerState({
     directoryPlayers: players.directoryPlayers,
+    directoryLoaded: players.directoryLoaded,
     navigateToPlanner: () => navigate(ROUTE_PATHS.planner),
   });
   const sessions = useSessionsData({
@@ -277,8 +278,18 @@ export default function App() {
     handleDeleteSession,
   };
 
+  // An ?edit= token was supplied for this session, yet the server opened it read-only.
+  const invalidEditLink = Boolean(
+    routeEditToken &&
+      routeSessionId &&
+      !scoring.sessionLoading &&
+      scoring.currentSession?.sessionId === routeSessionId &&
+      !scoring.currentSession.canEdit
+  );
+
   const scoringRoute = {
     ...scoring,
+    invalidEditLink,
     handleBackToPlanner,
     openRenameDialog: sessions.openRenameDialog,
   };

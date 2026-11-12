@@ -38,20 +38,89 @@ export const ROUTE_PATHS = {
   playerStats: "/stats",
 };
 
-export function readStorage(key, fallback) {
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasSameShapeAsFallback(value, fallback) {
+  if (Array.isArray(fallback)) return Array.isArray(value);
+  if (isPlainObject(fallback)) return isPlainObject(value);
+  if (fallback === null || fallback === undefined) return isPlainObject(value);
+  return typeof value === typeof fallback;
+}
+
+// Safe read: never throws (storage disabled, malformed JSON) and never returns a
+// value whose type differs from the fallback (e.g. a stored "null" or "123").
+// An optional `isValid(value)` can reject further.
+export function readStorage(key, fallback, isValid = null) {
   if (typeof window === "undefined") return fallback;
 
   try {
     const rawValue = window.localStorage.getItem(key);
-    return rawValue ? JSON.parse(rawValue) : fallback;
+    if (!rawValue) return fallback;
+    const parsed = JSON.parse(rawValue);
+    if (!hasSameShapeAsFallback(parsed, fallback)) return fallback;
+    if (isValid && !isValid(parsed)) return fallback;
+    return parsed;
   } catch {
     return fallback;
   }
 }
 
+// Safe write: quota errors / disabled storage must not crash the render tree.
 export function writeStorage(key, value) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+export function removeStorage(key) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Persistence is best-effort.
+  }
+}
+
+// Coerce whatever was persisted for the planner into a structurally safe shape.
+export function sanitizePlannerState(raw) {
+  if (!isPlainObject(raw)) return null;
+
+  const stringArray = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
+  const pairArray = (value) =>
+    Array.isArray(value)
+      ? value.filter(
+          (pair) => Array.isArray(pair) && pair.length === 2 && pair.every((item) => typeof item === "string")
+        )
+      : [];
+
+  const config = isPlainObject(raw.config) ? { ...raw.config } : {};
+  if (!isPlainObject(config.limits)) delete config.limits;
+  if (!Array.isArray(config.court_numbers)) delete config.court_numbers;
+
+  const rosterIsValid =
+    isPlainObject(raw.roster) &&
+    Array.isArray(raw.roster.rounds) &&
+    raw.roster.rounds.every((round) => isPlainObject(round) && Array.isArray(round.courts));
+  const baselineIsValid =
+    isPlainObject(raw.generatedRosterBaseline) && Array.isArray(raw.generatedRosterBaseline.rounds);
+
+  return {
+    selectedPlayerIds: stringArray(raw.selectedPlayerIds),
+    fixedPairIds: pairArray(raw.fixedPairIds),
+    config,
+    roster: rosterIsValid ? raw.roster : null,
+    generatedRosterBaseline: rosterIsValid && baselineIsValid ? raw.generatedRosterBaseline : null,
+    rosterSignature: rosterIsValid && typeof raw.rosterSignature === "string" ? raw.rosterSignature : null,
+    hasManualRosterEdits: rosterIsValid && Boolean(raw.hasManualRosterEdits),
+    // Legacy (pre-directory) fields, only used for migration.
+    players: Array.isArray(raw.players) ? raw.players : undefined,
+    fixedPairs: Array.isArray(raw.fixedPairs) ? raw.fixedPairs : undefined,
+  };
 }
 
 export function createSessionName() {
@@ -66,6 +135,69 @@ export function createSessionName() {
 
 export function normalizeConfig(config) {
   return { ...DEFAULT_CONFIG, ...config };
+}
+
+// League + Knockout (fixed-pair schedule) needs every selected player in exactly
+// one fixed pair, at least two pairs, and exactly pairs // 2 courts. The backend
+// rejects anything else only at Generate time with a raw error, so the planner
+// checks the same rules up front.
+export function getLeagueKnockoutCourts(pairCount) {
+  return Math.floor(pairCount / 2);
+}
+
+export function getLeagueKnockoutIssue({ drawType, playerCount, pairCount }) {
+  if (drawType !== "league_knockout") return null;
+  if (pairCount < 2) {
+    return "League + Knockout needs at least 2 fixed pairs. Pair players up in step 1 or switch to Round Robin.";
+  }
+  if (pairCount * 2 !== playerCount) {
+    return `League + Knockout: every selected player must be in a fixed pair (${playerCount} players, ${pairCount} pairs). Pair everyone up in step 1 or switch to Round Robin.`;
+  }
+  return null;
+}
+
+// Split the backend's roster violations into the ones that must block starting a
+// session and the ones that are expected by design.
+//
+// With Play Twice (league_meetings = 2) every pair meets every other pair exactly
+// twice, so the backend's "Duplicate knockout matchup" check always fires once per
+// pair of pairs and no swap can remove it. Those first repeats are expected; a
+// matchup repeated more often than the format allows is still a real violation.
+export function splitRosterViolations(roster, config) {
+  const violations = roster?.violations || [];
+  const allowedRepeats = config?.draw_type === "league_knockout" ? Math.max((config.league_meetings || 1) - 1, 0) : 0;
+  if (allowedRepeats === 0) {
+    return { blocking: violations, expectedRepeats: [] };
+  }
+
+  const repeatsByMatchup = new Map();
+  const blocking = [];
+  const expectedRepeats = [];
+  violations.forEach((violation) => {
+    if (!violation.startsWith(DUPLICATE_KNOCKOUT_VIOLATION_PREFIX)) {
+      blocking.push(violation);
+      return;
+    }
+    const matchup = violation.split(" (rounds")[0];
+    const seen = repeatsByMatchup.get(matchup) || 0;
+    repeatsByMatchup.set(matchup, seen + 1);
+    if (seen < allowedRepeats) {
+      expectedRepeats.push(violation);
+    } else {
+      blocking.push(violation);
+    }
+  });
+  return { blocking, expectedRepeats };
+}
+
+// Change the court count and keep court_numbers in sync with it.
+export function withCourtCount(config, courtCount) {
+  const existing = config.court_numbers || [];
+  const courtNumbers = [...existing.slice(0, courtCount)];
+  for (let index = courtNumbers.length; index < courtCount; index += 1) {
+    courtNumbers.push(String(index + 1));
+  }
+  return { ...config, num_courts: courtCount, court_numbers: courtNumbers };
 }
 
 export function getPlannerRosterSignature(selectedPlayerIds, fixedPairIds, config, directoryPlayers) {
@@ -349,9 +481,12 @@ export function normalizeSession(session) {
     ...normalized,
     knockoutScoresByRound: knockoutRounds.map((round, roundIndex) => {
       const existingScores = normalized.knockoutScoresByRound[roundIndex];
-      return existingScores && existingScores.length === round.courts.length
-        ? existingScores
-        : createScoresForRounds([round])[0];
+      if (!Array.isArray(existingScores)) return createScoresForRounds([round])[0];
+      if (existingScores.length === round.courts.length) return existingScores;
+      // Clamp to the round's real court count: drop phantom rows beyond it and
+      // pad missing ones, but keep every real score that is already stored.
+      const emptyRow = createScoresForRounds([round])[0];
+      return round.courts.map((_, courtIndex) => existingScores[courtIndex] ?? emptyRow[courtIndex]);
     }),
     activeKnockoutRound:
       normalized.activeKnockoutRound > knockoutRounds.length - 1

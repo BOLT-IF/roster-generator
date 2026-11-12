@@ -5,19 +5,22 @@ import {
   DUPLICATE_KNOCKOUT_VIOLATION_PREFIX,
   PLANNER_STORAGE_KEY,
   createSessionName,
+  getLeagueKnockoutIssue,
   getLeagueRequestPayload,
   getPlannerRosterSignature,
   getRosterRevalidatePayload,
   normalizeConfig,
   readStorage,
+  sanitizePlannerState,
+  splitRosterViolations,
   swapRosterRounds,
   swapRosterSlots,
   swapRosterTeams,
   writeStorage,
 } from "./appStateUtils";
 
-export default function usePlannerState({ directoryPlayers, navigateToPlanner }) {
-  const plannerState = useRef(readStorage(PLANNER_STORAGE_KEY, null)).current;
+export default function usePlannerState({ directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
+  const plannerState = useRef(sanitizePlannerState(readStorage(PLANNER_STORAGE_KEY, null))).current;
   const reviewStepRef = useRef(null);
 
   const [selectedPlayerIds, setSelectedPlayerIds] = useState(plannerState?.selectedPlayerIds || []);
@@ -50,7 +53,14 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
     })
     .filter(Boolean);
   const plannerRosterSignature = getPlannerRosterSignature(selectedPlayerIds, fixedPairIds, config, directoryPlayers);
-  const isRosterStale = Boolean(roster && rosterSignature && rosterSignature !== plannerRosterSignature);
+  // Until the directory has loaded, the signature is computed against an empty
+  // directory and would always differ from the saved one, so never call the
+  // roster stale before we can actually compare.
+  const isRosterStale = Boolean(
+    directoryLoaded && roster && rosterSignature && rosterSignature !== plannerRosterSignature
+  );
+
+  const { blocking: blockingViolations, expectedRepeats } = splitRosterViolations(roster, config);
 
   const selectedEditSummary = (() => {
     if (!roster || !selectedRosterTarget) return "";
@@ -92,11 +102,12 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
       return;
     }
 
-    const duplicateViolations = (roster.violations || []).filter((violation) =>
+    // Expected Play Twice repeats are not worth a warning dialog.
+    const duplicateViolations = splitRosterViolations(roster, config).blocking.filter((violation) =>
       violation.startsWith(DUPLICATE_KNOCKOUT_VIOLATION_PREFIX)
     );
     setDuplicateKnockoutViolations(duplicateViolations);
-  }, [config.draw_type, roster]);
+  }, [config.draw_type, config.league_meetings, roster]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isRosterStale) {
@@ -133,14 +144,16 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
   }, [directoryPlayers, fixedPairIds.length, plannerState, selectedPlayerIds.length]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const nextPlayersById = new Map(directoryPlayers.map((player) => [player.playerId, player]));
     const validSelectedIds = selectedPlayerIds.filter((playerId) => nextPlayersById.has(playerId));
     if (validSelectedIds.length !== selectedPlayerIds.length) {
       setSelectedPlayerIds(validSelectedIds);
     }
-  }, [directoryPlayers, selectedPlayerIds]);
+  }, [directoryLoaded, directoryPlayers, selectedPlayerIds]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const selectedIdSet = new Set(selectedPlayerIds);
     const validPairs = fixedPairIds.filter(
       ([firstId, secondId]) =>
@@ -151,9 +164,10 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
     if (validPairs.length !== fixedPairIds.length) {
       setFixedPairIds(validPairs);
     }
-  }, [fixedPairIds, selectedPlayerIds]);
+  }, [directoryLoaded, fixedPairIds, selectedPlayerIds]);
 
   useEffect(() => {
+    if (!directoryLoaded) return;
     const nextPlayersById = new Map(directoryPlayers.map((player) => [player.playerId, player]));
     const selectedShortNameSet = new Set(
       selectedPlayerIds
@@ -169,7 +183,7 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
       }
       return { ...current, limits: nextLimits };
     });
-  }, [directoryPlayers, selectedPlayerIds]);
+  }, [directoryLoaded, directoryPlayers, selectedPlayerIds]);
 
   async function handleGenerate() {
     if (hasManualRosterEdits && typeof window !== "undefined") {
@@ -337,7 +351,12 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
   }
 
   const canContinueFromPlayers = selectedPlayerIds.length >= 4;
-  const canContinueFromSettings = config.num_courts >= 1;
+  const configIssue = getLeagueKnockoutIssue({
+    drawType: config.draw_type,
+    playerCount: selectedPlayerIds.length,
+    pairCount: fixedPairIds.length,
+  });
+  const canContinueFromSettings = config.num_courts >= 1 && !configIssue;
 
   return {
     plannerStep,
@@ -367,8 +386,11 @@ export default function usePlannerState({ directoryPlayers, navigateToPlanner })
     isRosterStale,
     selectedEditSummary,
     duplicateKnockoutViolations,
+    blockingViolations,
+    expectedRepeatCount: expectedRepeats.length,
     canContinueFromPlayers,
     canContinueFromSettings,
+    configIssue,
     handleGenerate,
     clearPlannerError,
     dismissDuplicateKnockoutViolations,
