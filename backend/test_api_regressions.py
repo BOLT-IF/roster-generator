@@ -999,5 +999,143 @@ class RoundLifecycleTests(unittest.TestCase):
         self.assertEqual(ended.status_code, 200, ended.text)
 
 
+class EditRoundGuardsTests(unittest.TestCase):
+    """M-06: only the last ended league round re-opens; knockout wipes need confirm.
+
+    Any ended league round could be re-opened, including earlier ones while
+    later rounds stayed ended around it, and every re-open silently deleted
+    all knockout rounds and scores with no confirmation.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _complete_round_robin(self, name, rounds=2):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=rounds,
+        )
+        session = create_round_robin_session(self.client, name=name, roster=roster)
+        for round_index in range(rounds):
+            post_action(self.client, session, "start-round", {"stage": "league", "round_index": round_index})
+            for court in range(2):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamA", "value": 21},
+                )
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamB", "value": 15},
+                )
+            ended = post_action(
+                self.client, session, "end-round", {"stage": "league", "round_index": round_index}
+            )
+            assert ended.status_code == 200, ended.text
+        return session
+
+    def _complete_lk_with_semifinals(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=3,
+            pair_games=1,
+        )
+        session = create_round_robin_session(
+            self.client,
+            name=name,
+            roster=roster,
+            draw_config={"draw_type": "league_knockout", "league_meetings": 1, "knockout_qualifiers": 4},
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            pair_games=1,
+        )
+        for round_index in range(3):
+            post_action(self.client, session, "start-round", {"stage": "league", "round_index": round_index})
+            for court in range(2):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamA", "value": 21},
+                )
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamB", "value": 15},
+                )
+            post_action(self.client, session, "end-round", {"stage": "league", "round_index": round_index})
+        post_action(self.client, session, "start-round", {"stage": "knockout", "round_index": 0})
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(self.client, session, "end-round", {"stage": "knockout", "round_index": 0})
+        assert ended.status_code == 200, ended.text
+        return session
+
+    def test_only_the_last_ended_league_round_can_be_reopened(self):
+        session = self._complete_round_robin("M06 Non Last Reopen")
+
+        early = post_action(self.client, session, "edit-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(early.status_code, 409, early.text)
+        self.assertIn("most recently", early.json()["detail"].lower())
+
+        last = post_action(self.client, session, "edit-round", {"stage": "league", "round_index": 1})
+        self.assertEqual(last.status_code, 200, last.text)
+
+    def test_reopen_with_knockout_data_requires_confirm(self):
+        session = self._complete_lk_with_semifinals("M06 Knockout Wipe")
+
+        without_confirm = post_action(
+            self.client, session, "edit-round", {"stage": "league", "round_index": 2}
+        )
+        self.assertEqual(without_confirm.status_code, 409, without_confirm.text)
+        self.assertIn("knockout", without_confirm.json()["detail"].lower())
+
+        detail = get_session(self.client, session).json()
+        self.assertTrue(detail["ended_knockout_rounds"][0], "knockout round must survive the rejected edit")
+
+        with_confirm = post_action(
+            self.client,
+            session,
+            "edit-round",
+            {"stage": "league", "round_index": 2, "confirm_knockout_wipe": True},
+        )
+        self.assertEqual(with_confirm.status_code, 200, with_confirm.text)
+
+        detail = get_session(self.client, session).json()
+        self.assertEqual(detail["ended_knockout_rounds"], [], "confirmed edit must still wipe knockout data")
+
+    def test_reopen_without_knockout_data_needs_no_confirm(self):
+        session = self._complete_round_robin("M06 No Knockout")
+        response = post_action(self.client, session, "edit-round", {"stage": "league", "round_index": 1})
+        self.assertEqual(response.status_code, 200, response.text)
+
+
 if __name__ == "__main__":
     unittest.main()
