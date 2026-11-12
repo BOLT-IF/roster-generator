@@ -92,7 +92,8 @@ def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
 
 def _best_court_assignment(playing, num_courts, partner_history, opponent_history,
                            fixed_pairs, fixed_pair_counts, pair_target,
-                           pairs_active, attempts=500):
+                           pairs_active, attempts=500, rng=None):
+    shuffler = rng if rng is not None else random
     playing_set = set(playing)
     if pairs_active:
         active_pairs = [
@@ -107,10 +108,10 @@ def _best_court_assignment(playing, num_courts, partner_history, opponent_histor
         pool = list(playing)
         courts = []
 
-        random.shuffle(active_pairs)
+        shuffler.shuffle(active_pairs)
         placed = set()
         court_slots = list(range(num_courts))
-        random.shuffle(court_slots)
+        shuffler.shuffle(court_slots)
         slot_idx = 0
         pair_assignments = {}
         for pair in active_pairs:
@@ -122,7 +123,7 @@ def _best_court_assignment(playing, num_courts, partner_history, opponent_histor
             slot_idx += 1
 
         remaining = [p for p in pool if p not in placed]
-        random.shuffle(remaining)
+        shuffler.shuffle(remaining)
 
         ri = 0
         for c in range(num_courts):
@@ -206,8 +207,10 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
     Raises RosterError on invalid input.
     """
-    if seed is not None:
-        random.seed(seed)
+    # A dedicated RNG instance keeps seeded generation deterministic
+    # without reseeding the process-global random module (which corrupted
+    # concurrent seeded requests and every other random consumer).
+    rng = random.Random(seed)
 
     num_playing = num_courts * 4
     num_resting = len(players) - num_playing
@@ -250,7 +253,7 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
         courts = _best_court_assignment(
             playing, num_courts, partner_history, opponent_history,
             fixed_pairs, fixed_pair_counts, pair_target,
-            pairs_active,
+            pairs_active, rng=rng,
         )
 
         for p in resting:

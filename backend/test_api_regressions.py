@@ -1413,5 +1413,54 @@ class TieBreakAlignmentTests(unittest.TestCase):
         )
 
 
+class SeededRngIsolationTests(unittest.TestCase):
+    """L-02: seeded generation must not reseed the process-global RNG.
+
+    generate_roster called random.seed(seed) on the global module, so
+    concurrent seeded requests interleaved each other's draws (only 5 of 12
+    concurrent same-seed runs matched the serial result) and every other
+    random consumer in the process got silently reseeded.
+    """
+
+    def test_seeded_generation_does_not_reseed_the_global_rng(self):
+        import random as random_module
+
+        from roster_engine import generate_roster
+
+        players = [f"P{i}" for i in range(8)]
+        common = dict(
+            num_courts=2,
+            num_rounds=2,
+            consecutive_limits={},
+            fixed_pairs=[],
+        )
+
+        generate_roster(players, seed=1, **common)
+        first_draw = random_module.random()
+        generate_roster(players, seed=1, **common)
+        second_draw = random_module.random()
+        self.assertNotEqual(
+            first_draw,
+            second_draw,
+            "global RNG was reseeded by seeded generation: both draws identical",
+        )
+
+    def test_same_seed_still_produces_identical_rosters(self):
+        from roster_engine import generate_roster
+
+        players = [f"P{i}" for i in range(8)]
+        common = dict(
+            num_courts=2,
+            num_rounds=2,
+            consecutive_limits={},
+            fixed_pairs=[],
+            seed=42,
+        )
+
+        first_rounds, _, _, _ = generate_roster(players, **common)
+        second_rounds, _, _, _ = generate_roster(players, **common)
+        self.assertEqual(first_rounds, second_rounds)
+
+
 if __name__ == "__main__":
     unittest.main()
