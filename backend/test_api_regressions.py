@@ -404,5 +404,57 @@ class UnseededGenerateFreshnessTests(unittest.TestCase):
             client.__exit__(None, None, None)
 
 
+class RenameSoftDeletedConflictTests(unittest.TestCase):
+    """M-01: renaming onto a soft-deleted player's name must return 409.
+
+    The rename conflict check ignored soft-deleted players, passed the app
+    layer, and then hit the DB UNIQUE constraint on the normalized names:
+    a raw 500 (IntegrityError) instead of a conflict response.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_rename_onto_soft_deleted_name_returns_409_not_500(self):
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        ghost_full = f"Ghost One {tag}"
+        ghost_short = f"GO{tag}"
+        live_full = f"Live One {tag}"
+        live_short = f"LO{tag}"
+
+        ghost = self.client.post("/api/players", json={"full_name": ghost_full, "short_name": ghost_short})
+        self.assertEqual(ghost.status_code, 201, ghost.text)
+        ghost_id = ghost.json()["player_id"]
+
+        deleted = self.client.post(
+            f"/api/players/{ghost_id}/delete",
+            json={"admin_token": "thisismytoken", "delete_history": False},
+        )
+        self.assertEqual(deleted.status_code, 204, deleted.text)
+
+        live = self.client.post("/api/players", json={"full_name": live_full, "short_name": live_short})
+        self.assertEqual(live.status_code, 201, live.text)
+        live_id = live.json()["player_id"]
+
+        renamed = self.client.patch(
+            f"/api/players/{live_id}",
+            json={"full_name": ghost_full, "short_name": ghost_short},
+        )
+        self.assertEqual(renamed.status_code, 409, renamed.text)
+
+        unchanged = self.client.get("/api/players")
+        names = {player["full_name"] for player in unchanged.json()}
+        self.assertIn(live_full, names)
+        self.assertNotIn(ghost_full, names)
+
+
 if __name__ == "__main__":
     unittest.main()

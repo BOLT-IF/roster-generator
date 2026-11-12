@@ -2081,12 +2081,32 @@ def update_player(player_id: str, req: PlayerUpdateRequest):
         normalized_full_name = _normalize_player_name(req.full_name)
         normalized_short_name = _normalize_player_name(req.short_name)
 
-        existing_full = _find_name_conflict(db, normalized_full_name, exclude_player_id=player_id)
+        existing_full = _find_name_conflict(
+            db, normalized_full_name, exclude_player_id=player_id, include_deleted=True
+        )
         if existing_full:
+            if existing_full.is_deleted:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A deleted player still holds this full name. Recreate that player "
+                        "with the same full and short name to restore it, or pick another name."
+                    ),
+                )
             raise HTTPException(status_code=409, detail="A player with this full name already exists")
 
-        existing_short = _find_name_conflict(db, normalized_short_name, exclude_player_id=player_id)
+        existing_short = _find_name_conflict(
+            db, normalized_short_name, exclude_player_id=player_id, include_deleted=True
+        )
         if existing_short:
+            if existing_short.is_deleted:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "A deleted player still holds this short name. Recreate that player "
+                        "with the same full and short name to restore it, or pick another name."
+                    ),
+                )
             raise HTTPException(status_code=409, detail="A player with this short name already exists")
 
         alias_pool = []
