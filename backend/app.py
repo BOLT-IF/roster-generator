@@ -1173,6 +1173,10 @@ def _sync_completed_session_stats(db, record: SharedSessionRecord, payload: dict
     if not completion_state["completed"]:
         if existing_summary:
             _delete_session_analytics(db, record.session_id)
+            # The session factory runs with autoflush=False; flush the pending
+            # deletes so the summary rebuild below aggregates post-delete state
+            # instead of re-counting the rows it is about to remove.
+            db.flush()
             _rebuild_player_stats_summary(db)
         return
 
