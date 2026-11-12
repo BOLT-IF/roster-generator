@@ -97,6 +97,7 @@ export default function PlayerInput({
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [pairSelection, setPairSelection] = useState({ active: false, first: "" });
+  const [pairNotice, setPairNotice] = useState("");
 
   const playersById = useMemo(
     () => new Map(availablePlayers.map((player) => [player.playerId, player])),
@@ -132,6 +133,7 @@ export default function PlayerInput({
 
   function togglePair(playerId) {
     if (!pairSelection.active) {
+      setPairNotice("");
       setPairSelection({ active: true, first: playerId });
       return;
     }
@@ -147,12 +149,12 @@ export default function PlayerInput({
     );
 
     if (alreadyExists) {
-      setFixedPairIds(
-        fixedPairIds.filter(
-          ([firstId, secondId]) => !(firstId === nextPair[0] && secondId === nextPair[1])
-        )
-      );
+      // Selecting an existing pair again must not silently dissolve it; removal is
+      // an explicit action on the pair chip.
+      const names = nextPair.map((id) => playersById.get(id)?.shortName || id).join(" & ");
+      setPairNotice(`${names} are already paired. Use the \u00d7 on the pair under Fixed pairs to remove it.`);
     } else {
+      setPairNotice("");
       const nextFixedPairs = fixedPairIds.filter(
         ([firstId, secondId]) =>
           firstId !== nextPair[0] &&
@@ -167,6 +169,7 @@ export default function PlayerInput({
   }
 
   function removePair(index) {
+    setPairNotice("");
     setFixedPairIds(fixedPairIds.filter((_, currentIndex) => currentIndex !== index));
   }
 
@@ -224,6 +227,12 @@ export default function PlayerInput({
               </button>
             </div>
           </div>
+
+          {pairNotice && !pairSelection.active ? (
+            <div role="status" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {pairNotice}
+            </div>
+          ) : null}
 
           {pairSelection.active ? (
             <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">
