@@ -1632,5 +1632,59 @@ class SeedGatingTests(unittest.TestCase):
         )
 
 
+class PlayerIdEntropyTests(unittest.TestCase):
+    """L-07a: player ids get 64-bit entropy and regenerate on collision.
+
+    Ids were plr_ + 32 bits — enumerable at internet scale, and a collision
+    would fail the insert with a raw IntegrityError.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_player_ids_have_64_bit_entropy(self):
+        import re
+
+        from app import _generate_player_id
+
+        ids = {_generate_player_id() for _ in range(1000)}
+        self.assertEqual(len(ids), 1000)
+        for player_id in ids:
+            self.assertTrue(re.fullmatch(r"plr_[0-9a-f]{16}", player_id), f"bad id shape: {player_id}")
+
+    def test_create_regenerates_on_id_collision(self):
+        import uuid
+        from unittest.mock import patch
+
+        import app as app_module
+
+        tag = uuid.uuid4().hex[:8]
+        first = self.client.post(
+            "/api/players", json={"full_name": f"Entropy One {tag}", "short_name": f"EO{tag}"}
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+        taken_id = first.json()["player_id"]
+        fresh_id = f"plr_{tag[:16]}"
+
+        with patch.object(app_module, "_generate_player_id", side_effect=[taken_id, fresh_id]):
+            second = self.client.post(
+                "/api/players",
+                json={"full_name": f"Entropy Two {tag}", "short_name": f"ET{tag}"},
+            )
+
+        self.assertEqual(second.status_code, 201, second.text)
+        self.assertEqual(
+            second.json()["player_id"],
+            fresh_id,
+            "collision with an existing id must regenerate instead of failing",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

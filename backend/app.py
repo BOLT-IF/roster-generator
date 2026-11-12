@@ -578,7 +578,16 @@ def _backfill_player_normalized_names(db):
 
 
 def _generate_player_id() -> str:
-    return f"plr_{secrets.token_hex(4)}"
+    # 64 bits of entropy (was 32): ids appear in public session payloads and
+    # should not be enumerable at internet scale.
+    return f"plr_{secrets.token_hex(8)}"
+
+
+def _unused_player_id(db) -> str:
+    player_id = _generate_player_id()
+    while db.get(PlayerRecord, player_id) is not None:
+        player_id = _generate_player_id()
+    return player_id
 
 
 def _serialize_player(row: PlayerRecord) -> PlayerResponse:
@@ -596,7 +605,7 @@ def _create_player_record(db, full_name: str, short_name: str, *, source: str):
     normalized_full_name = _normalize_player_name(full_name)
     normalized_short_name = _normalize_player_name(short_name)
     player = PlayerRecord(
-        player_id=_generate_player_id(),
+        player_id=_unused_player_id(db),
         full_name=full_name,
         short_name=short_name,
         normalized_full_name=normalized_full_name,
@@ -627,7 +636,7 @@ def _ensure_legacy_player_record(db, full_name: str, short_name: str):
         return existing_player, False
 
     values = {
-        "player_id": _generate_player_id(),
+        "player_id": _unused_player_id(db),
         "full_name": full_name,
         "short_name": short_name,
         "normalized_full_name": normalized_full_name,
