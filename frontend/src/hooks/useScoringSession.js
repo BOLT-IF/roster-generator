@@ -249,10 +249,28 @@ export default function useScoringSession({
     });
   }
 
+  // Drop a failed pending edit and put the cell back to the last value the
+  // server confirmed, so the UI never shows a score that was not saved and
+  // polling is no longer blocked by the dead entry.
+  function rollbackScoreEdit(syncKey, expectedRawValue) {
+    const edit = pendingScoreEditsRef.current[syncKey];
+    if (!edit) return;
+    // A newer edit for the same cell supersedes this failure.
+    if (expectedRawValue !== undefined && edit.rawValue !== expectedRawValue) return;
+
+    delete pendingScoreEditsRef.current[syncKey];
+    lastLocalEditAtRef.current = 0;
+    setCurrentSession((session) =>
+      applyLocalScoreChange(session, edit.stage, edit.roundIndex, edit.courtIndex, edit.teamKey, edit.serverValue ?? "")
+    );
+  }
+
   async function pushScoreUpdate(sessionId, editToken, stage, roundIndex, courtIndex, teamKey, rawValue) {
     const syncKey = getScoreSyncKey(stage, roundIndex, courtIndex, teamKey);
 
     return enqueueScoreMutation(async () => {
+      // Nothing pending for this cell (already saved or rolled back): skip the write.
+      if (!pendingScoreEditsRef.current[syncKey]) return;
       try {
         const result = await updateSharedScore(sessionId, {
           stage,
@@ -268,6 +286,7 @@ export default function useScoringSession({
         setCurrentSession((session) => (session ? { ...session, version: result.version ?? session.version } : session));
         setPageError(null);
       } catch (error) {
+        rollbackScoreEdit(syncKey, rawValue);
         setPageError(error.message);
         throw error;
       }
@@ -282,6 +301,15 @@ export default function useScoringSession({
     if (pendingEntries.length === 0) return;
 
     await enqueueScoreMutation(async () => {
+      try {
+        await sendBatch();
+      } catch (error) {
+        pendingEntries.forEach(([syncKey, edit]) => rollbackScoreEdit(syncKey, edit.rawValue));
+        throw error;
+      }
+    });
+
+    async function sendBatch() {
       const updates = pendingEntries.map(([, edit]) => ({
         stage,
         round_index: roundIndex,
@@ -304,7 +332,7 @@ export default function useScoringSession({
 
       setCurrentSession((session) => (session ? { ...session, version: result.version ?? session.version } : session));
       setPageError(null);
-    });
+    }
   }
 
   function clearPageError() {
@@ -315,12 +343,20 @@ export default function useScoringSession({
     if (!currentSession?.sessionId || !currentSession.canEdit) return;
 
     lastLocalEditAtRef.current = Date.now();
-    pendingScoreEditsRef.current[getScoreSyncKey(stage, roundIndex, courtIndex, teamKey)] = {
+    const syncKey = getScoreSyncKey(stage, roundIndex, courtIndex, teamKey);
+    const scoresKey = stage === "league" ? "leagueScoresByRound" : "knockoutScoresByRound";
+    // Remember the value the server last confirmed (the first edit's starting point).
+    const serverValue =
+      syncKey in pendingScoreEditsRef.current
+        ? pendingScoreEditsRef.current[syncKey].serverValue
+        : currentSession[scoresKey]?.[roundIndex]?.[courtIndex]?.[teamKey] ?? "";
+    pendingScoreEditsRef.current[syncKey] = {
       stage,
       roundIndex,
       courtIndex,
       teamKey,
       rawValue,
+      serverValue,
     };
     setCurrentSession((session) =>
       applyLocalScoreChange(session, stage, roundIndex, courtIndex, teamKey, rawValue)
