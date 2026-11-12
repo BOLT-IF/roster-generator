@@ -1254,5 +1254,383 @@ class KnockoutTieTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
 
+class QualifierNormalizationTests(unittest.TestCase):
+    """H-04: legacy sessions with odd knockout_qualifiers must not crash.
+
+    Sessions created before request validation could hold
+    knockout_qualifiers=3 (or 5+). Completing their knockout hit seeds[3]
+    with a 3-entry list: an IndexError 500 on every end-round attempt, and
+    the planned-rounds count disagreed with the built bracket.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _create_lk_session(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            num_courts=2,
+            court_numbers=["1", "2"],
+            rounds=3,
+            pair_games=1,
+        )
+        return create_round_robin_session(
+            self.client,
+            name=name,
+            roster=roster,
+            draw_config={"draw_type": "league_knockout", "league_meetings": 1, "knockout_qualifiers": 4},
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            pair_games=1,
+        )
+
+    def _corrupt_to_legacy_qualifiers(self, session_id, qualifiers):
+        import copy
+
+        import app as app_module
+
+        with app_module.get_db_session() as db:
+            record = db.scalar(
+                app_module.select(app_module.SharedSessionRecord).where(
+                    app_module.SharedSessionRecord.session_id == session_id
+                )
+            )
+            data = copy.deepcopy(record.data)
+            data["draw_config"]["knockout_qualifiers"] = qualifiers
+            record.data = data
+
+    def _complete_league(self, session):
+        for round_index in range(3):
+            post_action(
+                self.client, session, "start-round", {"stage": "league", "round_index": round_index}
+            )
+            for court in range(2):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamA", "value": 21},
+                )
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "league", "round_index": round_index, "court_index": court, "team_key": "teamB", "value": 15},
+                )
+            ended = post_action(
+                self.client, session, "end-round", {"stage": "league", "round_index": round_index}
+            )
+            assert ended.status_code == 200, ended.text
+
+    def test_legacy_three_qualifiers_completes_without_500(self):
+        session = self._create_lk_session("H04 Legacy Three")
+        self._corrupt_to_legacy_qualifiers(session["session_id"], 3)
+        self._complete_league(session)
+
+        started = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(
+            self.client, session, "end-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(ended.status_code, 200, f"previously IndexError 500: {ended.text}")
+
+        detail = get_session(self.client, session).json()
+        self.assertTrue(detail["ended_knockout_rounds"][0])
+
+    def test_legacy_five_qualifiers_completes_without_500(self):
+        session = self._create_lk_session("H04 Legacy Five")
+        self._corrupt_to_legacy_qualifiers(session["session_id"], 5)
+        self._complete_league(session)
+
+        started = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+        for court in range(2):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamA", "value": 21},
+            )
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "knockout", "round_index": 0, "court_index": court, "team_key": "teamB", "value": 15},
+            )
+        ended = post_action(
+            self.client, session, "end-round", {"stage": "knockout", "round_index": 0}
+        )
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+
+class TieBreakAlignmentTests(unittest.TestCase):
+    """M-10a: the final standings tie-break must match the UI's.
+
+    The server broke full ties with raw Python string comparison (uppercase
+    first: 'Beta' before 'alpha'), while the UI used localeCompare - so the
+    server could seed different semifinalists than the scorers saw ranked
+    on screen. Both sides now break ties case-insensitively.
+    """
+
+    def test_final_tiebreak_is_case_insensitive(self):
+        from app import _rank_stats_entries
+
+        entries = [
+            ("Beta & One", {"points": 10, "point_difference": 5, "wins": 3}),
+            ("alpha & Two", {"points": 10, "point_difference": 5, "wins": 3}),
+            ("Gamma & Three", {"points": 12, "point_difference": 5, "wins": 4}),
+        ]
+        ranked = [name for name, _ in _rank_stats_entries(entries)]
+        self.assertEqual(ranked[0], "Gamma & Three", "higher points must rank first")
+        self.assertEqual(
+            ranked[1:],
+            ["alpha & Two", "Beta & One"],
+            "case-insensitive order expected: raw string order puts 'Beta & One' first",
+        )
+
+
+class SeededRngIsolationTests(unittest.TestCase):
+    """L-02: seeded generation must not reseed the process-global RNG.
+
+    generate_roster called random.seed(seed) on the global module, so
+    concurrent seeded requests interleaved each other's draws (only 5 of 12
+    concurrent same-seed runs matched the serial result) and every other
+    random consumer in the process got silently reseeded.
+    """
+
+    def test_seeded_generation_does_not_reseed_the_global_rng(self):
+        import random as random_module
+
+        from roster_engine import generate_roster
+
+        players = [f"P{i}" for i in range(8)]
+        common = dict(
+            num_courts=2,
+            num_rounds=2,
+            consecutive_limits={},
+            fixed_pairs=[],
+        )
+
+        generate_roster(players, seed=1, **common)
+        first_draw = random_module.random()
+        generate_roster(players, seed=1, **common)
+        second_draw = random_module.random()
+        self.assertNotEqual(
+            first_draw,
+            second_draw,
+            "global RNG was reseeded by seeded generation: both draws identical",
+        )
+
+    def test_same_seed_still_produces_identical_rosters(self):
+        from roster_engine import generate_roster
+
+        players = [f"P{i}" for i in range(8)]
+        common = dict(
+            num_courts=2,
+            num_rounds=2,
+            consecutive_limits={},
+            fixed_pairs=[],
+            seed=42,
+        )
+
+        first_rounds, _, _, _ = generate_roster(players, **common)
+        second_rounds, _, _, _ = generate_roster(players, **common)
+        self.assertEqual(first_rounds, second_rounds)
+
+
+class EngineCompletenessTests(unittest.TestCase):
+    """H-05: every player is playing or resting exactly once per round.
+
+    With 9 players on 1 court, the rest selector could return fewer than the
+    required 5 resters (cannot_rest thinned the candidates); the surplus
+    'playing' players then vanished in the court builder - neither on a
+    court nor resting - while rest_counts still claimed perfectly balanced
+    rest. Field-observed with seed 42: rounds 2, 4 and 6 each lost a player.
+    """
+
+    def test_every_player_accounted_for_exactly_once_per_round(self):
+        from roster_engine import generate_roster
+
+        players = [f"P{i}" for i in range(9)]
+        rounds, rest_counts, _, _ = generate_roster(
+            players,
+            num_courts=1,
+            num_rounds=6,
+            consecutive_limits={},
+            fixed_pairs=[],
+            max_consecutive_rest=1,
+            seed=42,
+        )
+
+        for round_data in rounds:
+            on_courts = [
+                player
+                for team_a, team_b in round_data["courts"]
+                for player in list(team_a) + list(team_b)
+            ]
+            accounted = on_courts + round_data["resting"]
+            self.assertEqual(
+                sorted(accounted),
+                sorted(players),
+                f"round {round_data['round']} dropped or duplicated a player",
+            )
+            self.assertEqual(len(on_courts), 4, f"round {round_data['round']} must field exactly 4 players on 1 court")
+
+        self.assertEqual(sum(rest_counts.values()), 6 * 5, "rest slots must total rounds * resting-per-round")
+
+    def test_completeness_across_other_odd_shapes(self):
+        from roster_engine import generate_roster
+
+        for player_count, courts, num_rounds in ((7, 1, 5), (10, 2, 6), (13, 3, 7), (6, 1, 4)):
+            players = [f"P{i}" for i in range(player_count)]
+            rounds, _, _, _ = generate_roster(
+                players,
+                num_courts=courts,
+                num_rounds=num_rounds,
+                consecutive_limits={},
+                fixed_pairs=[],
+                max_consecutive_rest=1,
+                seed=7,
+            )
+            for round_data in rounds:
+                on_courts = [
+                    player
+                    for team_a, team_b in round_data["courts"]
+                    for player in list(team_a) + list(team_b)
+                ]
+                accounted = on_courts + round_data["resting"]
+                self.assertEqual(
+                    sorted(accounted),
+                    sorted(players),
+                    f"{player_count}p/{courts}c round {round_data['round']} dropped or duplicated a player",
+                )
+                self.assertEqual(len(on_courts), courts * 4)
+
+
+class LegacyNameBackfillTests(unittest.TestCase):
+    """L-08: legacy players rows get their normalized names backfilled.
+
+    The schema migration added normalized_* columns with DEFAULT '' and no
+    backfill, so pre-feature rows kept empty normalized names: the DB UNIQUE
+    constraints never fired, and creating 'Legacy Larry' twice succeeded.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_backfill_restores_conflict_detection_for_legacy_rows(self):
+        import uuid
+
+        import app as app_module
+
+        tag = uuid.uuid4().hex[:8]
+        full_name = f"Legacy Larry {tag}"
+        short_name = f"LL{tag}"
+        created = self.client.post("/api/players", json={"full_name": full_name, "short_name": short_name})
+        self.assertEqual(created.status_code, 201, created.text)
+        player_id = created.json()["player_id"]
+
+        # Simulate a pre-migration row: normalized columns empty.
+        with app_module.get_db_session() as db:
+            row = db.get(app_module.PlayerRecord, player_id)
+            row.normalized_full_name = ""
+            row.normalized_short_name = ""
+
+        # The next boot backfills normalized names for legacy rows.
+        with app_module.get_db_session() as db:
+            app_module._backfill_player_normalized_names(db)
+
+        with app_module.get_db_session() as db:
+            row = db.get(app_module.PlayerRecord, player_id)
+            self.assertEqual(row.normalized_full_name, full_name.lower())
+            self.assertEqual(row.normalized_short_name, short_name.lower())
+
+        duplicate = self.client.post("/api/players", json={"full_name": full_name, "short_name": short_name})
+        self.assertEqual(
+            duplicate.status_code,
+            409,
+            f"legacy row must conflict again after backfill, got {duplicate.status_code}: {duplicate.text}",
+        )
+
+
+class SeedGatingTests(unittest.TestCase):
+    """L-05: the 22-name default directory seeds only when enabled.
+
+    Every empty database was auto-seeded with 22 hardcoded personal names,
+    on any deployment. Seeding is now gated by ROSTER_SEED_PLAYERS (default
+    enabled, preserving the group's local convenience; '0' gives clean
+    deployments).
+    """
+
+    def _count_players_on_fresh_db(self, flag):
+        import os
+        import subprocess
+        import sys
+
+        db_path = f"/tmp/roster-seed-{flag}-{os.getpid()}.db"
+        script = "\n".join([
+            "import os",
+            "os.environ['PLAYWRIGHT_TEST_MODE'] = '1'",
+            f"os.environ['DATABASE_URL'] = 'sqlite:///{db_path}'",
+            "os.environ['CACHE_ENABLED'] = 'false'",
+            f"os.environ['ROSTER_SEED_PLAYERS'] = '{flag}'",
+            "from database import init_db, get_db_session",
+            "init_db()",
+            "import app as a",
+            "with get_db_session() as db:",
+            "    a._ensure_player_registry(db)",
+            "    print(len(db.scalars(a.select(a.PlayerRecord)).all()))",
+        ])
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return int(result.stdout.strip().splitlines()[-1])
+
+    def test_default_directory_seeding_is_env_gated(self):
+        disabled = self._count_players_on_fresh_db("0")
+        self.assertEqual(disabled, 0, "ROSTER_SEED_PLAYERS=0 must seed nothing on an empty database")
+
+        enabled = self._count_players_on_fresh_db("1")
+        self.assertEqual(
+            enabled,
+            22,
+            "default ROSTER_SEED_PLAYERS must keep seeding the 22-name directory",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

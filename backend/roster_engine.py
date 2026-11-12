@@ -53,6 +53,19 @@ def _select_resting_players(players, num_resting, must_rest, cannot_rest,
             resting.discard(p)
             still_needed += 1
 
+    if len(resting) < num_resting:
+        # Safety net: never return fewer resters than the round requires.
+        # Surplus "playing" players would silently vanish in the court
+        # builder - neither on a court nor resting. Completeness beats the
+        # consecutive-rest preference; any resulting rest-streak violation
+        # surfaces through the normal violation reporting instead.
+        shortfall = num_resting - len(resting)
+        fallback = sorted(
+            (p for p in players if p not in resting),
+            key=lambda p: (rest_counts[p], -consec_play[p]),
+        )
+        resting.update(fallback[:shortfall])
+
     return resting
 
 
@@ -92,7 +105,8 @@ def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
 
 def _best_court_assignment(playing, num_courts, partner_history, opponent_history,
                            fixed_pairs, fixed_pair_counts, pair_target,
-                           pairs_active, attempts=500):
+                           pairs_active, attempts=500, rng=None):
+    shuffler = rng if rng is not None else random
     playing_set = set(playing)
     if pairs_active:
         active_pairs = [
@@ -107,10 +121,10 @@ def _best_court_assignment(playing, num_courts, partner_history, opponent_histor
         pool = list(playing)
         courts = []
 
-        random.shuffle(active_pairs)
+        shuffler.shuffle(active_pairs)
         placed = set()
         court_slots = list(range(num_courts))
-        random.shuffle(court_slots)
+        shuffler.shuffle(court_slots)
         slot_idx = 0
         pair_assignments = {}
         for pair in active_pairs:
@@ -122,7 +136,7 @@ def _best_court_assignment(playing, num_courts, partner_history, opponent_histor
             slot_idx += 1
 
         remaining = [p for p in pool if p not in placed]
-        random.shuffle(remaining)
+        shuffler.shuffle(remaining)
 
         ri = 0
         for c in range(num_courts):
@@ -206,8 +220,10 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
     Raises RosterError on invalid input.
     """
-    if seed is not None:
-        random.seed(seed)
+    # A dedicated RNG instance keeps seeded generation deterministic
+    # without reseeding the process-global random module (which corrupted
+    # concurrent seeded requests and every other random consumer).
+    rng = random.Random(seed)
 
     num_playing = num_courts * 4
     num_resting = len(players) - num_playing
@@ -250,8 +266,24 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
         courts = _best_court_assignment(
             playing, num_courts, partner_history, opponent_history,
             fixed_pairs, fixed_pair_counts, pair_target,
-            pairs_active,
+            pairs_active, rng=rng,
         )
+
+        # Structural safety net: every player must appear exactly once per
+        # round - on a court or resting. A future engine change that breaks
+        # this invariant must fail loudly, not silently drop or duplicate
+        # players.
+        on_courts = [p for team_a, team_b in courts for p in list(team_a) + list(team_b)]
+        if (
+            len(on_courts) != num_courts * 4
+            or len(set(on_courts)) != len(on_courts)
+            or set(on_courts) & set(resting)
+            or set(on_courts) | set(resting) != set(players)
+        ):
+            raise RosterError(
+                f"Internal scheduling error: round {round_num} does not account "
+                "for every player exactly once. Please report this configuration."
+            )
 
         for p in resting:
             rest_counts[p] += 1

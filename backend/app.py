@@ -12,6 +12,8 @@ from copy import deepcopy
 
 from datetime import datetime, timezone
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
@@ -48,7 +50,17 @@ from roster_engine import (
     RosterError,
 )
 
-app = FastAPI(title="Badminton Roster API")
+@asynccontextmanager
+async def lifespan(app_instance):
+    init_db()
+    cache.initialize()
+    with get_db_session() as db:
+        _ensure_player_registry(db)
+        _backfill_player_normalized_names(db)
+    yield
+
+
+app = FastAPI(title="Badminton Roster API", lifespan=lifespan)
 
 ADMIN_RECOVERY_TOKEN = os.getenv("ADMIN_RECOVERY_TOKEN", "thisismytoken")
 DEFAULT_PLAYER_DIRECTORY = [
@@ -89,14 +101,6 @@ async def request_validation_exception_handler(request, exc):
         status_code=422,
         content={"detail": _sanitize_error_details(jsonable_encoder(exc.errors()))},
     )
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    cache.initialize()
-    with get_db_session() as db:
-        _ensure_player_registry(db)
 
 
 def _cache_ttl(name: str, default_seconds: int) -> int:
@@ -283,8 +287,12 @@ class DrawConfig(BaseModel):
     @field_validator("knockout_qualifiers")
     @classmethod
     def qualifiers_supported(cls, v):
-        if v not in (2, 4):
-            raise ValueError("knockout_qualifiers must be 2 or 4")
+        # Lenient here on purpose: this model also validates stored payloads
+        # on serialization, and legacy sessions can hold odd counts. Odd
+        # values are normalized when the bracket is built; creation enforces
+        # the supported set.
+        if v < 2:
+            raise ValueError("knockout_qualifiers must be at least 2")
         return v
 
 
@@ -542,6 +550,33 @@ def _normalize_player_name(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
+def _backfill_player_normalized_names(db):
+    """Fill empty normalized names left by the legacy schema migration.
+
+    The migration added the normalized_* columns with DEFAULT '' and no
+    backfill, so pre-feature rows kept empty normalized names and the UNIQUE
+    constraints never fired - duplicate players could be created freely.
+    First-wins on exact duplicates: the conflicting row keeps its empty
+    value rather than failing the whole backfill.
+    """
+    rows = db.scalars(select(PlayerRecord)).all()
+    if not rows:
+        return
+    taken_full = {row.normalized_full_name for row in rows if row.normalized_full_name}
+    taken_short = {row.normalized_short_name for row in rows if row.normalized_short_name}
+    for row in rows:
+        if not row.normalized_full_name:
+            candidate = _normalize_player_name(row.full_name)
+            if candidate and candidate not in taken_full:
+                row.normalized_full_name = candidate
+                taken_full.add(candidate)
+        if not row.normalized_short_name:
+            candidate = _normalize_player_name(row.short_name)
+            if candidate and candidate not in taken_short:
+                row.normalized_short_name = candidate
+                taken_short.add(candidate)
+
+
 def _generate_player_id() -> str:
     return f"plr_{secrets.token_hex(4)}"
 
@@ -688,7 +723,8 @@ def _ensure_player_registry(db):
             discovered_names.add(cleaned)
 
     if not active_players and not discovered_names:
-        discovered_names.update(DEFAULT_PLAYER_DIRECTORY)
+        if os.getenv("ROSTER_SEED_PLAYERS", "1") != "0":
+            discovered_names.update(DEFAULT_PLAYER_DIRECTORY)
 
     changed = False
     for name in sorted(discovered_names):
@@ -999,6 +1035,9 @@ def _rank_stats_entries(entries):
             -item[1]["points"],
             -item[1]["point_difference"],
             -item[1]["wins"],
+            # Case-insensitive final tie-break, matching the UI's ranking;
+            # the raw string is a secondary key for full determinism.
+            item[0].casefold(),
             item[0],
         ),
     )
@@ -1047,6 +1086,22 @@ def _create_knockout_round(label: str, round_number: int, matches: list[list[lis
     }
 
 
+def _normalized_qualifier_count(draw_config: dict, available: int) -> int:
+    """Normalize knockout_qualifiers to the bracket shapes the engine builds.
+
+    Legacy sessions (created before request validation) can hold odd counts
+    like 3 or 5. Normalize to 4 when at least 4 pairs are available, else 2,
+    so bracket indexing is always safe and the planned round count matches
+    the built bracket.
+    """
+    qualifiers = min(draw_config.get("knockout_qualifiers", 4), available)
+    if qualifiers < 2:
+        return 0
+    if qualifiers not in (2, 4):
+        qualifiers = 4 if available >= 4 else 2
+    return qualifiers
+
+
 def _build_knockout_rounds_for_stats(
     draw_config: dict,
     roster_rounds: list[dict],
@@ -1061,7 +1116,7 @@ def _build_knockout_rounds_for_stats(
         return []
 
     pair_standings = _build_pair_standings(roster_rounds, league_scores_by_round)
-    qualifier_count = min(draw_config.get("knockout_qualifiers", 4), len(pair_standings))
+    qualifier_count = _normalized_qualifier_count(draw_config, len(pair_standings))
     if qualifier_count < 2:
         return []
 
@@ -1619,7 +1674,7 @@ def _count_league_pairs(payload: dict) -> int:
 def _planned_knockout_rounds(draw_config: dict, pair_count: int) -> int:
     if draw_config.get("draw_type") != "league_knockout":
         return 0
-    qualifiers = min(draw_config.get("knockout_qualifiers", 4), pair_count)
+    qualifiers = _normalized_qualifier_count(draw_config, pair_count)
     if qualifiers >= 4:
         return 2
     if qualifiers >= 2:
@@ -2098,6 +2153,8 @@ def create_shared_session(req: SharedSessionCreateRequest):
         inferred_players = sorted(seen_players)
 
     if req.draw_config.draw_type == "league_knockout":
+        if req.draw_config.knockout_qualifiers not in (2, 4):
+            raise HTTPException(status_code=422, detail="knockout_qualifiers must be 2 or 4")
         pair_count = len(req.fixed_pairs) if req.fixed_pairs else max(len(inferred_players) // 2, 1)
         if req.draw_config.knockout_qualifiers > pair_count:
             raise HTTPException(

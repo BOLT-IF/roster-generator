@@ -27,7 +27,11 @@ function rankStandings(entries) {
       return statsB.pointDifference - statsA.pointDifference;
     }
     if (statsB.wins !== statsA.wins) return statsB.wins - statsA.wins;
-    return nameA.localeCompare(nameB);
+    // Case-insensitive final tie-break, matching the server's ranking
+    // (localeCompare was locale-dependent and could diverge from it).
+    const a = nameA.toLowerCase();
+    const b = nameB.toLowerCase();
+    return a < b ? -1 : a > b ? 1 : 0;
   });
 }
 
@@ -175,7 +179,13 @@ export function buildKnockoutRounds(
     roster.rounds,
     filterScoresByEndedRounds(roster.rounds, leagueScoresByRound, endedLeagueRounds)
   );
-  const qualifierCount = Math.min(drawConfig.knockout_qualifiers || 4, pairStandings.length);
+  // Mirror the server's normalization: legacy sessions can hold odd
+  // qualifier counts (3, 5, ...); normalize to the bracket the standings
+  // support so seeds[3] can never be undefined.
+  let qualifierCount = Math.min(drawConfig.knockout_qualifiers || 4, pairStandings.length);
+  if (qualifierCount >= 2 && qualifierCount !== 2 && qualifierCount !== 4) {
+    qualifierCount = pairStandings.length >= 4 ? 4 : 2;
+  }
   if (qualifierCount < 2) return [];
 
   const seeds = pairStandings.slice(0, qualifierCount).map(([pairName]) => pairName.split(" & "));
