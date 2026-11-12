@@ -1,5 +1,37 @@
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+// FastAPI returns `detail` as a string for HTTPException but as an array of
+// {loc, msg, ...} objects for request-validation (422) errors. Flatten either
+// shape into one readable line so no page ever renders "[object Object]".
+export function formatApiErrorDetail(detail, fallback) {
+  if (typeof detail === "string") return detail.trim() || fallback;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (!item || typeof item !== "object") return "";
+        const msg = typeof item.msg === "string" ? item.msg : typeof item.message === "string" ? item.message : "";
+        const loc = Array.isArray(item.loc)
+          ? item.loc.filter((part) => part !== "body" && part !== "query" && part !== "path").join(".")
+          : "";
+        if (!msg) return "";
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .filter(Boolean);
+    return parts.length > 0 ? parts.join("; ") : fallback;
+  }
+  if (detail && typeof detail === "object") {
+    if (typeof detail.msg === "string") return detail.msg;
+    if (typeof detail.message === "string") return detail.message;
+  }
+  return fallback;
+}
+
+async function buildApiError(res) {
+  const body = await res.json().catch(() => ({ detail: "Server error" }));
+  return new Error(formatApiErrorDetail(body?.detail, `HTTP ${res.status}`));
+}
+
 function withEditToken(path, editToken) {
   if (!editToken) return `${API_BASE}${path}`;
 
@@ -16,8 +48,7 @@ export async function generateRoster(payload) {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Server error" }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw await buildApiError(res);
   }
 
   return res.json();
@@ -31,8 +62,7 @@ export async function revalidateRoster(payload) {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Server error" }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw await buildApiError(res);
   }
 
   return res.json();
@@ -40,8 +70,7 @@ export async function revalidateRoster(payload) {
 
 async function readJson(res) {
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Server error" }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw await buildApiError(res);
   }
 
   return res.json();
@@ -73,8 +102,7 @@ export async function deleteSharedSession(sessionId, editToken) {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Server error" }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw await buildApiError(res);
   }
 }
 
@@ -184,8 +212,7 @@ export async function deletePlayer(playerId, payload) {
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Server error" }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw await buildApiError(res);
   }
 }
 
