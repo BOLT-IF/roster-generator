@@ -1,0 +1,228 @@
+"""API regression tests accompanying the Bucket A fix stack.
+
+Run from backend/:
+
+    venv/bin/python -m unittest test_api_regressions -v
+
+Each test class maps to one fix PR and must fail before that fix lands
+(run the class on the parent branch to see it red). The test database is
+configured BEFORE importing the app package because the app reads
+environment variables at import time.
+"""
+
+import os
+import unittest
+
+os.environ.setdefault("PLAYWRIGHT_TEST_MODE", "1")
+os.environ["DATABASE_URL"] = "sqlite:////tmp/roster-api-regressions.db"
+os.environ["ADMIN_RECOVERY_TOKEN"] = "thisismytoken"
+os.environ["CACHE_ENABLED"] = "false"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from app import app  # noqa: E402
+
+
+def generate_roster(client, **overrides):
+    payload = {
+        "players": ["A", "B", "C", "D"],
+        "fixed_pairs": [],
+        "num_courts": 1,
+        "court_numbers": ["1"],
+        "rounds": 1,
+        "limits": {},
+        "pair_games": 1,
+        "pair_start_round": 1,
+        "max_consecutive_rest": 1,
+        "seed": 1,
+    }
+    payload.update(overrides)
+    response = client.post("/api/generate", json=payload)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def create_round_robin_session(client, name="Regression Session"):
+    roster = generate_roster(client)
+    response = client.post(
+        "/api/sessions",
+        json={
+            "name": name,
+            "roster": roster,
+            "draw_config": {
+                "draw_type": "round_robin",
+                "league_meetings": 1,
+                "knockout_qualifiers": 4,
+            },
+            "selected_players": [],
+            "fixed_pairs": [],
+            "limits": {},
+            "pair_games": 1,
+            "pair_start_round": 1,
+            "max_consecutive_rest": 1,
+            "admin_token": "thisismytoken",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def post_action(client, session, path, body):
+    return client.post(
+        f"/api/sessions/{session['session_id']}/{path}",
+        params={"edit_token": session["edit_token"]},
+        json=body,
+    )
+
+
+def get_session(client, session):
+    return client.get(
+        f"/api/sessions/{session['session_id']}",
+        params={"edit_token": session["edit_token"]},
+    )
+
+
+class BatchScoreFreshCourtTests(unittest.TestCase):
+    """H-03: a batch containing both teams of a court with no stored row.
+
+    Before the fix, the second update in the batch could not see the first
+    update's unflushed insert, so it inserted a duplicate primary key and the
+    whole batch failed with 500 and no scores stored.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_batch_with_both_teams_on_fresh_court_stores_both_scores(self):
+        session = create_round_robin_session(self.client, name="H03 Batch Fresh Court")
+        started = post_action(
+            self.client, session, "start-round", {"stage": "league", "round_index": 0}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+
+        batch = post_action(
+            self.client,
+            session,
+            "scores/batch",
+            {
+                "stage": "league",
+                "round_index": 0,
+                "updates": [
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamA",
+                        "value": 21,
+                    },
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamB",
+                        "value": 15,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(batch.status_code, 200, batch.text)
+
+        detail = get_session(self.client, session)
+        self.assertEqual(detail.status_code, 200)
+        scores = detail.json()["league_scores_by_round"][0][0]
+        self.assertEqual(scores, {"teamA": 21, "teamB": 15})
+
+    def test_single_write_then_batch_still_works(self):
+        session = create_round_robin_session(self.client, name="H03 Single Then Batch")
+        post_action(
+            self.client, session, "start-round", {"stage": "league", "round_index": 0}
+        )
+        first = post_action(
+            self.client,
+            session,
+            "score",
+            {
+                "stage": "league",
+                "round_index": 0,
+                "court_index": 0,
+                "team_key": "teamA",
+                "value": 21,
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+
+        batch = post_action(
+            self.client,
+            session,
+            "scores/batch",
+            {
+                "stage": "league",
+                "round_index": 0,
+                "updates": [
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamA",
+                        "value": 21,
+                    },
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamB",
+                        "value": 15,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(batch.status_code, 200, batch.text)
+        scores = get_session(self.client, session).json()["league_scores_by_round"][0][0]
+        self.assertEqual(scores, {"teamA": 21, "teamB": 15})
+
+    def test_round_can_be_ended_after_fresh_court_batch(self):
+        session = create_round_robin_session(self.client, name="H03 Batch Then End")
+        post_action(
+            self.client, session, "start-round", {"stage": "league", "round_index": 0}
+        )
+        batch = post_action(
+            self.client,
+            session,
+            "scores/batch",
+            {
+                "stage": "league",
+                "round_index": 0,
+                "updates": [
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamA",
+                        "value": 21,
+                    },
+                    {
+                        "stage": "league",
+                        "round_index": 0,
+                        "court_index": 0,
+                        "team_key": "teamB",
+                        "value": 15,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(batch.status_code, 200, batch.text)
+        ended = post_action(
+            self.client, session, "end-round", {"stage": "league", "round_index": 0}
+        )
+        self.assertEqual(ended.status_code, 200, ended.text)
+        self.assertTrue(ended.json()["ended_league_rounds"][0])
+
+
+if __name__ == "__main__":
+    unittest.main()

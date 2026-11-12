@@ -1631,6 +1631,11 @@ def _apply_score_update(db, session_id: str, payload: dict, req: ScoreUpdateRequ
             team_a_score=None,
             team_b_score=None,
         )
+        # Flush immediately so a later update in the same batch (which looks
+        # the row up by primary key) finds this row instead of inserting a
+        # duplicate and failing the whole batch with a UNIQUE violation.
+        db.add(score_record)
+        db.flush()
 
     if req.team_key == "teamA":
         score_record.team_a_score = None if next_value == "" else int(next_value)
