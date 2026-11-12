@@ -242,7 +242,7 @@ export default function useScoringSession({
           round_index: roundIndex,
           court_index: courtIndex,
           team_key: teamKey,
-          value: rawValue === "" ? null : Math.max(0, Number.parseInt(rawValue, 10) || 0),
+          value: rawValue === "" ? null : Math.min(99, Math.max(0, Number.parseInt(rawValue, 10) || 0)),
         }, editToken || sessionAccess[sessionId] || null);
         if (pendingScoreEditsRef.current[syncKey]?.rawValue === rawValue) {
           delete pendingScoreEditsRef.current[syncKey];
@@ -270,7 +270,7 @@ export default function useScoringSession({
         round_index: roundIndex,
         court_index: edit.courtIndex,
         team_key: edit.teamKey,
-        value: edit.rawValue === "" ? null : Math.max(0, Number.parseInt(edit.rawValue, 10) || 0),
+        value: edit.rawValue === "" ? null : Math.min(99, Math.max(0, Number.parseInt(edit.rawValue, 10) || 0)),
       }));
 
       const result = await batchUpdateSharedScores(sessionId, {
