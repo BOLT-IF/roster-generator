@@ -2310,6 +2310,35 @@ def list_shared_sessions():
 
 
 DEPLOY_REPO = os.environ.get("DEPLOY_REPO", "BOLT-IF/roster-generator")
+# Written by the deploy build command (`git rev-parse HEAD > backend/deploy_sha.txt`)
+# for hosts that only expose the commit at build time.
+_DEPLOY_SHA_FILE = os.path.join(os.path.dirname(__file__), "deploy_sha.txt")
+
+
+def _read_deploy_sha_file():
+    try:
+        with open(_DEPLOY_SHA_FILE, "r", encoding="utf-8") as fh:
+            sha = fh.read().strip()
+        return sha or None
+    except OSError:
+        return None
+
+
+def _git_head_sha():
+    """The local git checkout's HEAD (works when running from a repo, e.g.
+    local dev and CI). Kept as its own helper so tests can patch it."""
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=3,
+            cwd=os.path.dirname(__file__) or ".",
+        )
+        sha = result.stdout.strip()
+        return sha if result.returncode == 0 and len(sha) == 40 else None
+    except Exception:
+        return None
 
 
 def _github_json(path: str):
@@ -2330,9 +2359,14 @@ def _github_json(path: str):
 
 
 def _deployed_git_sha() -> str | None:
-    # Render injects RENDER_GIT_COMMIT at deploy time; APP_GIT_SHA is the
-    # local/CI override. Read per request so tests and deploys both work.
-    return os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("APP_GIT_SHA") or None
+    """Which commit is running? Source priority: the host's runtime env
+    (RENDER_GIT_COMMIT), an explicit APP_GIT_SHA override, a build-baked
+    deploy_sha.txt, then the local git checkout."""
+    for key in ("RENDER_GIT_COMMIT", "APP_GIT_SHA"):
+        value = os.environ.get(key)
+        if value:
+            return value
+    return _read_deploy_sha_file() or _git_head_sha()
 
 
 @app.get("/api/deploy-info", response_model=DeployInfoResponse)
