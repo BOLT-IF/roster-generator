@@ -7,6 +7,7 @@ import secrets
 import time
 import hashlib
 import json
+import urllib.request
 from collections import defaultdict
 from copy import deepcopy
 
@@ -237,6 +238,16 @@ class FairnessIssue(BaseModel):
     summary: str
     affected: list[str]
     unavoidable: bool = False
+
+
+class DeployInfoResponse(BaseModel):
+    """Is the running build the latest code? Deployed SHA vs main."""
+
+    deployed_sha: str | None = None
+    latest_main_sha: str | None = None
+    latest_main_at: str | None = None
+    ahead_by: int | None = None
+    status: str  # up_to_date | behind | unknown
 
 
 class FairnessReport(BaseModel):
@@ -2296,6 +2307,71 @@ def list_shared_sessions():
         _cache_ttl("CACHE_TTL_SESSIONS", 20),
         build_response,
     )
+
+
+DEPLOY_REPO = os.environ.get("DEPLOY_REPO", "BOLT-IF/roster-generator")
+
+
+def _github_json(path: str):
+    """One unauthenticated GitHub API read (public repo). None on any failure.
+
+    Kept as a module-level helper so tests can patch it and never touch the
+    network.
+    """
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com{path}",
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "roster-generator"},
+        )
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _deployed_git_sha() -> str | None:
+    # Render injects RENDER_GIT_COMMIT at deploy time; APP_GIT_SHA is the
+    # local/CI override. Read per request so tests and deploys both work.
+    return os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("APP_GIT_SHA") or None
+
+
+@app.get("/api/deploy-info", response_model=DeployInfoResponse)
+def api_deploy_info():
+    """Compare the running build with the latest main commit.
+
+    The GitHub lookups are cached for a minute: the badge is checked by
+    humans occasionally, and unauthenticated GitHub API calls are
+    rate-limited per IP.
+    """
+    deployed_sha = _deployed_git_sha()
+    if not deployed_sha:
+        return DeployInfoResponse(status="unknown")
+
+    def build():
+        commit = _github_json(f"/repos/{DEPLOY_REPO}/commits/main")
+        if not commit or not commit.get("sha"):
+            return {"deployed_sha": deployed_sha, "status": "unknown"}
+        latest_sha = commit["sha"]
+        latest_at = (commit.get("commit") or {}).get("committer", {}).get("date")
+        if latest_sha == deployed_sha:
+            return {
+                "deployed_sha": deployed_sha,
+                "latest_main_sha": latest_sha,
+                "latest_main_at": latest_at,
+                "ahead_by": 0,
+                "status": "up_to_date",
+            }
+        compare = _github_json(f"/repos/{DEPLOY_REPO}/compare/{deployed_sha}...{latest_sha}")
+        ahead_by = compare.get("ahead_by") if isinstance(compare, dict) else None
+        return {
+            "deployed_sha": deployed_sha,
+            "latest_main_sha": latest_sha,
+            "latest_main_at": latest_at,
+            "ahead_by": ahead_by,
+            "status": "behind",
+        }
+
+    return _cache_get_or_set("deploy", ["info", deployed_sha], 60, build)
 
 
 @app.get("/api/players", response_model=list[PlayerResponse])

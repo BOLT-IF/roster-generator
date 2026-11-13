@@ -219,3 +219,11 @@ export async function fetchPlayerStats(playerName) {
   const res = await fetch(`${API_BASE}/api/stats/players/${encodeURIComponent(playerName)}`);
   return readJson(res);
 }
+
+// Deploy status: is the running build the latest main? Never throws for the
+// UI - callers treat a failure as "no badge".
+export async function fetchDeployInfo() {
+  const res = await fetch(`${API_BASE}/api/deploy-info`);
+  if (!res.ok) throw await buildApiError(res);
+  return readJson(res);
+}
