@@ -38,13 +38,15 @@ test("league + knockout derives courts from the pair count and generates without
   await pair(page, players[6], players[7]);
 
   await page.getByRole("button", { name: "Next: Settings" }).click();
-  // A user who lowered courts to 1 for round robin: picking League + Knockout must
-  // adapt it to pairs / 2 = 2, otherwise Generate fails with a raw backend error.
+  // C-2: courts are a free choice from 1 up to pairs/2. A user who lowered
+  // courts to 1 for round robin keeps 1 court in League + Knockout - the
+  // league simply stretches over more rounds (4 pairs / 1 court = 6 rounds).
   await page.getByRole("button", { name: "Decrease Courts" }).click();
   await expect(courtsInput(page)).toHaveValue("1");
   await page.getByRole("button", { name: /League \+ Knockout/ }).click();
-  await expect(courtsInput(page)).toHaveValue("2");
-  await expect(page.getByText("League + Knockout uses 2 courts for 4 fixed pairs")).toBeVisible();
+  await expect(courtsInput(page)).toHaveValue("1");
+  await expect(page.getByText("League + Knockout uses up to 2 courts for 4 fixed pairs")).toBeVisible();
+  await expect(page.getByText("6 rounds (4 teams, play once, 1 court)")).toBeVisible();
 
   await page.getByRole("button", { name: "Next: Review" }).click();
   await page.getByRole("button", { name: "Generate Roster" }).click();
