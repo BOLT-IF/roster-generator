@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getLeagueKnockoutCourts, getLeagueKnockoutIssue, withCourtCount } from "../hooks/appStateUtils";
+import { getLeagueKnockoutIssue, withCourtCount } from "../hooks/appStateUtils";
 
 const DRAW_FORMATS = [
   {
@@ -115,11 +115,21 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
     return (teamCount - 1) * meetings;
   }
 
-  function getDerivedLeagueRounds(meetings = config.league_meetings) {
+  function getDerivedLeagueRounds(meetings = config.league_meetings, courts = config.num_courts) {
+    // C-2 D3: rounds = ceil(league matches / courts); spare slots in the
+    // final round become friendlies. Every pair meets every other pair
+    // exactly `meetings` times.
     const teamCount = getLeagueTeamCount();
-    if (teamCount < 2) return 0;
-    const baseRounds = teamCount % 2 === 0 ? teamCount - 1 : teamCount;
-    return baseRounds * meetings;
+    if (teamCount < 2 || courts < 1) return 0;
+    const matches = (teamCount * (teamCount - 1)) / 2 * meetings;
+    return Math.ceil(matches / courts);
+  }
+
+  function getLeagueSpareSlots(meetings = config.league_meetings, courts = config.num_courts) {
+    const teamCount = getLeagueTeamCount();
+    if (teamCount < 2 || courts < 1) return 0;
+    const matches = (teamCount * (teamCount - 1)) / 2 * meetings;
+    return Math.ceil(matches / courts) * courts - matches;
   }
 
   function updateLeagueFormat(nextValues) {
@@ -262,16 +272,17 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
     playerCount: players.length,
     pairCount: fixedPairs.length,
   });
-  const leagueKnockoutCourts = getLeagueKnockoutCourts(fixedPairs.length);
+  const leagueKnockoutMaxCourts = Math.floor(fixedPairs.length / 2);
 
-  // League + Knockout plays pairs / 2 matches per round, so courts are not a free
-  // choice: keep them in step with the pair count (and when the draw type changes).
+  // C-2 (M-19 amend): league + knockout courts are a free choice from 1
+  // up to pairs/2 (each court hosts one pair-vs-pair match per round);
+  // the server rejects more than that, so clamp rather than fail.
   useEffect(() => {
     if (config.draw_type !== "league_knockout") return;
-    if (leagueKnockoutCourts >= 1 && config.num_courts !== leagueKnockoutCourts) {
-      setConfig((prev) => withCourtCount(prev, leagueKnockoutCourts));
+    if (leagueKnockoutMaxCourts >= 1 && config.num_courts > leagueKnockoutMaxCourts) {
+      setConfig((prev) => withCourtCount(prev, leagueKnockoutMaxCourts));
     }
-  }, [config.draw_type, config.num_courts, leagueKnockoutCourts, setConfig]);
+  }, [config.draw_type, config.num_courts, leagueKnockoutMaxCourts, setConfig]);
 
   // Round Robin: never keep more courts than the selected players can fill
   // (4 players per court); the backend rejects that at Generate time.
@@ -288,7 +299,7 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
     if (derivedLeagueRounds > 0 && config.rounds !== derivedLeagueRounds) {
       setConfig((prev) => ({ ...prev, rounds: derivedLeagueRounds, pair_start_round: 1 }));
     }
-  }, [config.draw_type, config.rounds, derivedLeagueRounds, setConfig]);
+  }, [config.draw_type, config.rounds, config.num_courts, config.league_meetings, derivedLeagueRounds, setConfig]);
 
   useEffect(() => {
     if (config.draw_type !== "league_knockout") return;
@@ -345,7 +356,7 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
       ) : null}
       {config.draw_type === "league_knockout" && !leagueKnockoutIssue ? (
         <div className="mb-5 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800">
-          League + Knockout uses {leagueKnockoutCourts} court{leagueKnockoutCourts === 1 ? "" : "s"} for {fixedPairs.length} fixed pairs (one match per court each round).
+          League + Knockout uses up to {leagueKnockoutMaxCourts} court{leagueKnockoutMaxCourts === 1 ? "" : "s"} for {fixedPairs.length} fixed pairs (one match per court each round; fewer courts stretch the league over more rounds).
         </div>
       ) : null}
 
@@ -410,7 +421,7 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
           <div className="mt-3 rounded-lg bg-white px-3 py-2 text-sm text-gray-700">
             <span className="font-medium text-gray-900">League rounds:</span>{" "}
             {getLeagueTeamCount() >= 2
-              ? `${derivedLeagueRounds} rounds (${getLeagueTeamCount()} teams, ${config.league_meetings === 1 ? "play once" : "play twice"})`
+              ? `${derivedLeagueRounds} rounds (${getLeagueTeamCount()} teams, ${config.league_meetings === 1 ? "play once" : "play twice"}, ${config.num_courts} court${config.num_courts === 1 ? "" : "s"}${getLeagueSpareSlots() > 0 ? `, ${getLeagueSpareSlots()} friendly${getLeagueSpareSlots() === 1 ? "" : "s"}` : ""})`
               : "Add at least 2 fixed pairs to calculate league rounds"}
           </div>
 

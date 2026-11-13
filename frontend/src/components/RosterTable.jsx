@@ -20,7 +20,21 @@ const FAIRNESS_RULE_LABELS = {
   rest_unit_split: "Pair splits",
   matchup_spread: "Matchup balance",
   partner_repeat: "Partnerships",
+  rest_consecutive: "Rest breaks",
 };
+
+function CourtBadges({ court, courtLabel }) {
+  return (
+    <>
+      <span>{courtLabel}</span>
+      {court.friendly ? (
+        <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+          Friendly
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 function FairnessReportPanel({ fairness }) {
   const issues = fairness?.issues || [];
@@ -279,7 +293,9 @@ export default function RosterTable({
                     return (
                       <div key={`${round.round}-${courtIndex}`} className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
                         <div className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 sm:flex-row sm:items-center sm:justify-between">
-                          <span>Court {court_numbers?.[courtIndex] ?? courtIndex + 1}</span>
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <CourtBadges court={court} courtLabel={`Court ${court_numbers?.[courtIndex] ?? courtIndex + 1}`} />
+                          </span>
                           {pairA || pairB ? <span className="text-indigo-600">Fixed Pair Match</span> : null}
                         </div>
                         <div className="mt-3 space-y-2">
@@ -361,7 +377,9 @@ export default function RosterTable({
                       <td className="px-3 py-2 font-medium text-gray-700">
                         {isFirstCourt ? renderRoundButton(roundIndex, `${round.round}`) : ""}
                       </td>
-                      <td className="px-3 py-2 text-gray-600">{court_numbers?.[courtIndex] ?? courtIndex + 1}</td>
+                      <td className="px-3 py-2 text-gray-600">
+                        <CourtBadges court={court} courtLabel={court_numbers?.[courtIndex] ?? courtIndex + 1} />
+                      </td>
                       <td className="px-3 py-2">
                         {renderTeamCard(
                           court.team_a,

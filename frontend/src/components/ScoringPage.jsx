@@ -481,6 +481,11 @@ function RoundList({
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
                             {stage === "league" ? `Court ${round.court_numbers?.[courtIndex] ?? courtIndex + 1}` : "Match"}
+                            {court.friendly ? (
+                              <span className="ml-1.5 rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                                Friendly
+                              </span>
+                            ) : null}
                           </p>
                           <div className="mt-2 flex flex-col gap-2 text-sm text-gray-800">
                             <p className="rounded-lg bg-white px-3 py-2 font-medium shadow-sm">
