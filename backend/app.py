@@ -44,6 +44,7 @@ from database import (
 )
 from roster_engine import (
     find_duplicate_fixed_pair_matchups,
+    fairness_report,
     generate_fixed_pair_knockout_roster,
     generate_roster,
     validate_roster,
@@ -231,6 +232,22 @@ class RoundResult(BaseModel):
     resting: list[str]
 
 
+class FairnessIssue(BaseModel):
+    rule: str
+    summary: str
+    affected: list[str]
+    unavoidable: bool = False
+
+
+class FairnessReport(BaseModel):
+    """C-1 AC-W1: structured fairness report derived from the roster."""
+
+    rest_spread: int
+    corest_spread: int
+    matchup_spread: int
+    issues: list[FairnessIssue]
+
+
 class RosterResponse(BaseModel):
     rounds: list[RoundResult]
     court_numbers: list[str]
@@ -238,6 +255,7 @@ class RosterResponse(BaseModel):
     fixed_pair_counts: dict[str, int]
     violations: list[str]
     warnings: list[str]
+    fairness: FairnessReport | None = None
 
 
 class RosterRevalidateRequest(RosterRequest):
@@ -1980,6 +1998,10 @@ def _build_roster_response_from_rounds(
         fixed_pair_counts={f"{a} & {b}": count for (a, b), count in fixed_pair_counts.items()},
         violations=violations,
         warnings=warnings or [],
+        fairness=FairnessReport(**fairness_report(
+            rounds, players, fixed_pairs, pair_start_round,
+            None if draw_type == "league_knockout" else pair_games,
+        )),
     )
 
 
@@ -2134,6 +2156,10 @@ def api_generate(req: RosterRequest):
             fixed_pair_counts=fpc_str,
             violations=violations,
             warnings=warnings,
+            fairness=FairnessReport(**fairness_report(
+                rounds, req.players, fixed_pairs, req.pair_start_round,
+                None if req.draw_type == "league_knockout" else req.pair_games,
+            )),
         )
 
     if req.seed is None:

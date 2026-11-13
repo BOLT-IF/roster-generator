@@ -98,6 +98,12 @@ def spread(values):
     return max(vals) - min(vals)
 
 
+def _team_key(a, b):
+    """Order-independent key for a matchup of two teams."""
+    x, y = tuple(sorted(a)), tuple(sorted(b))
+    return (x, y) if x <= y else (y, x)
+
+
 def has_rule(warnings, rule):
     return any(w.startswith(rule) for w in warnings)
 
@@ -168,12 +174,13 @@ class RestFairnessTests(unittest.TestCase):
                 )
 
     def test_ac_f2_active_pairs_rest_as_a_unit(self):
-        # 10 players in 5 pairs, 2 courts: whoever rests, rests as a whole pair.
+        # 10 players in 5 pairs, 2 courts, unreachable together-target: the
+        # pair never dissolves, so whoever rests, rests as a whole pair.
         players = [f"U{i}" for i in range(1, 11)]
         pairs = [(players[i], players[i + 1]) for i in range(0, 10, 2)]
         rounds, _, _, _ = generate_roster(
             players, 2, 13, {}, pairs,
-            pair_target=10, max_consecutive_rest=1, pair_start_round=1, seed=11,
+            pair_target=20, max_consecutive_rest=1, pair_start_round=1, seed=11,
         )
         pair_sets = {frozenset(p) for p in pairs}
         for r in rounds:
@@ -325,6 +332,325 @@ class LimitPrecedenceTests(unittest.TestCase):
         rest_spread_warnings = [w for w in warnings if w.startswith("rest_spread")]
         self.assertTrue(rest_spread_warnings, "rest_spread warning missing")
         self.assertIn("L1", " ".join(rest_spread_warnings))
+
+
+class PairDissolutionTests(unittest.TestCase):
+    """C-1 v2: a pair dissolves once it completes its pair_games target.
+
+    After the target the two players are independent for courts AND rests
+    ("open to be random"); accidental re-pairing on a court is allowed.
+    Before the target (and in pure-pair sessions where the target is never
+    reached) the pair stays one rest unit - covered by RestFairnessTests.
+    """
+
+    def test_pairs_dissolve_after_target(self):
+        # 14 players, 3 courts, 3 pairs targeting 4 games together: the
+        # pairs complete around round 5 and dissolve for the rest of the
+        # session.
+        players = [f"V{i}" for i in range(1, 15)]
+        pairs = [(players[i], players[i + 1]) for i in range(0, 6, 2)]
+        for seed in (1, 2, 3):
+            with self.subTest(seed=seed):
+                rounds, rest_counts, fpc, warnings = generate_roster(
+                    players, 3, 13, {}, pairs,
+                    pair_target=4, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                )
+                for pair, count in fpc.items():
+                    self.assertTrue(
+                        4 <= count <= 5,
+                        f"{pair} played together {count}x (target 4)",
+                    )
+                # After dissolution, members rest independently: some later
+                # round rests exactly one member of a completed pair.
+                completed = [p for p in pairs if fpc.get(p, 0) >= 4]
+                independent_rests = 0
+                for r in rounds:
+                    if r["round"] <= 6:
+                        continue
+                    resting = set(r["resting"])
+                    for pair in completed:
+                        if len(resting & set(pair)) == 1:
+                            independent_rests += 1
+                self.assertGreater(
+                    independent_rests, 0,
+                    "dissolved pair members must be able to rest alone",
+                )
+                # With pairs dissolved, everyone rotates: rest spread <= 1.
+                vals = [rest_counts[p] for p in players]
+                self.assertLessEqual(max(vals) - min(vals), 1)
+
+
+class NoBackToBackRestPriorityTests(unittest.TestCase):
+    """C-1 v3 §3 rule 2: no player rests consecutive rounds - highest
+    scheduling priority. Zero violations whenever any schedule can avoid
+    them (never traded for rest spread, co-rest, or matchup fairness), and
+    the arithmetic minimum when unavoidable."""
+
+    @staticmethod
+    def _b2b_violations(rounds, max_consecutive_rest):
+        violations = validate_roster(rounds, {}, max_consecutive_rest, [], {}, 1, 1)
+        return sum(1 for v in violations if "rested" in v and "consecutive" in v)
+
+    def test_zero_back_to_back_when_avoidable(self):
+        # The fairness optimizer (spread, co-rest, matchups) runs fully on
+        # these configs - none of it may ever cost a back-to-back rest.
+        configs = [
+            (12, 2, 13, "all"),   # Organiser shape
+            (13, 3, 10, "none"),
+            (18, 4, 10, "none"),
+            (10, 2, 12, "none"),
+            (16, 4, 10, "all"),
+        ]
+        for players_n, courts, rounds_n, mode in configs:
+            if players_n - courts * 4 <= 0:
+                continue
+            with self.subTest(config=f"{players_n}p/{courts}c/{rounds_n}r/{mode}"):
+                for seed in (1, 2, 3):
+                    players = [f"N{seed}-{i}" for i in range(1, players_n + 1)]
+                    pairs = (
+                        [(players[i], players[i + 1]) for i in range(0, players_n - 1, 2)]
+                        if mode == "all" else []
+                    )
+                    rounds, _, _, _ = generate_roster(
+                        players, courts, rounds_n, {}, pairs,
+                        pair_target=13, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                    )
+                    self.assertEqual(
+                        self._b2b_violations(rounds, 1), 0,
+                        "a player rested back-to-back although an avoiding schedule exists",
+                    )
+
+    def test_unavoidable_case_hits_arithmetic_floor(self):
+        # 9 players, 1 court: 5 must rest but only 4 play, so at least
+        # (5 - 4) = 1 rester repeats every round after the first. Over 6
+        # rounds the minimum is exactly 5 back-to-back events - the engine
+        # must hit that floor, not merely stay near it.
+        players = [f"F{i}" for i in range(1, 10)]
+        for seed in (1, 2, 3):
+            with self.subTest(seed=seed):
+                rounds, _, _, _ = generate_roster(
+                    players, 1, 6, {}, [],
+                    pair_target=1, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                )
+                self.assertEqual(self._b2b_violations(rounds, 1), 5)
+
+
+class MatchupFairnessTests(unittest.TestCase):
+    """AC-M1..M4: pair-vs-pair matchup balance (fixed pairs) and partner/
+    opponent balance (rotating)."""
+
+    @staticmethod
+    def _pair_pair_keys(pairs):
+        return [
+            _team_key(frozenset(a), frozenset(b))
+            for a, b in combinations(pairs, 2)
+        ]
+
+    @staticmethod
+    def _matchup_counts(rounds, pairs):
+        pairset = {frozenset(p) for p in pairs}
+        counts = Counter()
+        for r in rounds:
+            for a, b in r["courts"]:
+                ta, tb = frozenset(a), frozenset(b)
+                if ta in pairset and tb in pairset:
+                    counts[_team_key(ta, tb)] += 1
+        return counts
+
+    def test_ac_m1_organiser_matchup_spread_within_one_all_seeds(self):
+        keys = self._pair_pair_keys(ORGANISER_PAIRS)
+        for seed in range(1, 21):
+            with self.subTest(seed=seed):
+                rounds, _, _, _ = organiser_roster(seed=seed)
+                counts = self._matchup_counts(rounds, ORGANISER_PAIRS)
+                vals = [counts.get(k, 0) for k in keys]
+                self.assertLessEqual(
+                    max(vals) - min(vals),
+                    1,
+                    f"matchup spread {max(vals) - min(vals)} > 1; dist {sorted(Counter(vals).items())}",
+                )
+
+    def test_ac_m2_no_repeat_while_unused_matchup_exists(self):
+        # On the Organiser config every matchup must be used before any
+        # reaches its second meeting (26 matches over 15 matchups forces
+        # 11 repeats, but no matchup may hit 2 while another sits at 0).
+        keys = self._pair_pair_keys(ORGANISER_PAIRS)
+        for seed in range(1, 21):
+            with self.subTest(seed=seed):
+                rounds, _, _, _ = organiser_roster(seed=seed)
+                counts = self._matchup_counts(rounds, ORGANISER_PAIRS)
+                vals = [counts.get(k, 0) for k in keys]
+                if min(vals) == 0:
+                    self.assertLessEqual(
+                        max(vals),
+                        1,
+                        f"a matchup repeated while another was never used; dist {sorted(Counter(vals).items())}",
+                    )
+
+    def test_ac_m2_grid_pair_configs_matchup_spread(self):
+        for players_n, courts, rounds_n, mode in GRID:
+            if mode != "all" or players_n - courts * 4 <= 0:
+                continue
+            with self.subTest(config=f"{players_n}p/{courts}c/{rounds_n}r/{mode}"):
+                players, courts_, rounds_, pairs, target = grid_config(players_n, courts, rounds_n, mode)
+                rounds, _, _, warnings = generate_roster(
+                    players, courts_, rounds_, {}, pairs,
+                    pair_target=target, max_consecutive_rest=1, pair_start_round=1, seed=5,
+                )
+                counts = self._matchup_counts(rounds, pairs)
+                keys = self._pair_pair_keys(pairs)
+                vals = [counts.get(k, 0) for k in keys]
+                s = spread(vals)
+                self.assertTrue(
+                    s <= 1 or has_rule(warnings, "matchup_spread"),
+                    f"matchup spread {s} > 1 without a matchup_spread warning",
+                )
+
+    def test_ac_m3_rotating_partners_once_before_repeat_and_opponents_even(self):
+        for players_n, courts, rounds_n in ((10, 2, 12), (12, 2, 13), (16, 3, 13), (8, 1, 6)):
+            with self.subTest(config=f"{players_n}p/{courts}c/{rounds_n}r rotating"):
+                players = [f"R{i}" for i in range(1, players_n + 1)]
+                if players_n - courts * 4 <= 0:
+                    continue
+                rounds, _, _, warnings = generate_roster(
+                    players, courts, rounds_n, {}, [],
+                    pair_target=3, max_consecutive_rest=1, pair_start_round=5, seed=5,
+                )
+                # Partnerships: no repeat while an unused pairing exists.
+                total_pairings = len(list(combinations(players, 2)))
+                used, repeats_while_unused = set(), 0
+                for r in rounds:
+                    for a, b in r["courts"]:
+                        for team in (a, b):
+                            key = frozenset(team)
+                            if key in used:
+                                if len(used) < total_pairings:
+                                    repeats_while_unused += 1
+                            else:
+                                used.add(key)
+                self.assertTrue(
+                    repeats_while_unused == 0 or has_rule(warnings, "partner_repeat"),
+                    f"{repeats_while_unused} partnership repeats while unused pairings remained",
+                )
+                # Opponents: spread <= 2, or a matchup_spread warning.
+                opp = Counter()
+                for r in rounds:
+                    for a, b in r["courts"]:
+                        for x in a:
+                            for y in b:
+                                opp[tuple(sorted((x, y)))] += 1
+                vals = [opp.get(tuple(sorted(x)), 0) for x in combinations(players, 2)]
+                self.assertTrue(
+                    spread(vals) <= 2 or has_rule(warnings, "matchup_spread"),
+                    f"opponent spread {spread(vals)} > 2 without a matchup_spread warning",
+                )
+
+    def test_ac_m4_shorted_matchups_vary_by_seed(self):
+        keys = self._pair_pair_keys(ORGANISER_PAIRS)
+        shorted_sets = set()
+        for seed in range(1, 21):
+            rounds, _, _, _ = organiser_roster(seed=seed)
+            counts = self._matchup_counts(rounds, ORGANISER_PAIRS)
+            shorted_sets.add(frozenset(k for k in keys if counts.get(k, 0) == 1))
+        self.assertGreaterEqual(
+            len(shorted_sets),
+            3,
+            f"the shorted matchups must vary with the seed; got {len(shorted_sets)} distinct sets",
+        )
+
+
+class FairnessReportTests(unittest.TestCase):
+    """AC-W1: /api/generate exposes a structured fairness report."""
+
+    @classmethod
+    def setUpClass(cls):
+        import regression_support  # noqa: F401  (env setup before app import)
+        from fastapi.testclient import TestClient
+        from app import app
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _generate(self, **overrides):
+        payload = {
+            "players": ORGANISER_PLAYERS,
+            "fixed_pairs": [list(p) for p in ORGANISER_PAIRS],
+            "num_courts": 2,
+            "court_numbers": ["1", "2"],
+            "rounds": 13,
+            "limits": {},
+            "pair_games": 13,
+            "pair_start_round": 1,
+            "max_consecutive_rest": 1,
+            "seed": 1,
+        }
+        payload.update(overrides)
+        response = self.client.post("/api/generate", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_fairness_object_shape_and_fields(self):
+        body = self._generate()
+        self.assertIn("fairness", body)
+        fairness = body["fairness"]
+        for key in ("rest_spread", "corest_spread", "matchup_spread"):
+            self.assertIn(key, fairness)
+            self.assertIsInstance(fairness[key], int)
+        self.assertIn("issues", fairness)
+        for issue in fairness["issues"]:
+            self.assertIn("rule", issue)
+            self.assertIn("summary", issue)
+            self.assertIn("affected", issue)
+            self.assertIsInstance(issue["affected"], list)
+
+    def test_organiser_matchup_issue_marks_unavoidable(self):
+        body = self._generate()
+        matchup_issues = [i for i in body["fairness"]["issues"] if i["rule"] == "matchup_spread"]
+        self.assertTrue(matchup_issues, "the Organiser config must carry a matchup issue (26 matches, 15 matchups)")
+        issue = matchup_issues[0]
+        self.assertTrue(issue.get("unavoidable"), "11x2 + 4x1 is arithmetically forced with 13 rounds")
+        self.assertTrue(issue["affected"], "the issue must name the shorted matchups")
+        # Backward compatibility: every issue also appears in warnings.
+        for issue in body["fairness"]["issues"]:
+            self.assertTrue(
+                any(w.startswith(issue["rule"]) for w in body["warnings"]),
+                f"warnings must still carry the {issue['rule']} string",
+            )
+
+    def test_rotating_report_is_well_formed_and_warns_honestly(self):
+        # AC-M3's targets (opponent spread ≤2, partner-once) are not always
+        # achievable per-run for rotating schedules; the spec requires the
+        # report to say exactly what slipped. A clean run must have no
+        # issues; an unclean run must carry well-formed issues from the
+        # known rules, mirrored in warnings.
+        body = self._generate(
+            players=[f"C{i}" for i in range(1, 11)],
+            fixed_pairs=[],
+            pair_games=1,
+            rounds=12,
+        )
+        fairness = body["fairness"]
+        known_rules = {"rest_spread", "corest_spread", "rest_unit_split",
+                       "matchup_spread", "partner_repeat"}
+        for issue in fairness["issues"]:
+            self.assertIn(issue["rule"], known_rules)
+            self.assertIn("summary", issue)
+            self.assertIn("affected", issue)
+            self.assertIsInstance(issue["affected"], list)
+            self.assertTrue(issue["affected"])
+            # Backward compatibility: every issue also appears in warnings.
+            self.assertTrue(
+                any(w.startswith(issue["rule"]) for w in body["warnings"]),
+                f"warnings must carry the {issue['rule']} string",
+            )
+        # A run that meets every target must report no issues at all.
+        if not fairness["issues"]:
+            self.assertLessEqual(fairness["rest_spread"], 1)
+            self.assertLessEqual(fairness["corest_spread"], 1)
+            self.assertLessEqual(fairness["matchup_spread"], 2)
 
 
 class FairnessPerformanceTests(unittest.TestCase):
