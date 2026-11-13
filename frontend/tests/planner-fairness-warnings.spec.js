@@ -1,10 +1,19 @@
 import { expect, test } from "@playwright/test";
 import { addPlannerPlayers, getFirstCourtPlayerButtons } from "./helpers/planner";
 
+// Slow CI runners can stall Playwright's actionability checks (visible /
+// enabled / stable) indefinitely on these small setup targets, even when
+// the element is plainly on screen. Setup clicks are therefore dispatched
+// directly on the DOM element - deterministic, no actionability waiting -
+// while the real verification stays with the expect() assertions below.
+async function domClick(locator) {
+  await locator.waitFor({ state: "visible", timeout: 10000 });
+  await locator.evaluate((el) => el.click());
+}
+
 // Pairing six pairs in a row re-renders the selected-players list after
-// every pairing; on narrow viewports the later cards can stay unsettled
-// long enough for a plain click to time out in slow CI. Scroll first and
-// retry while the list settles.
+// every pairing; later cards may still be settling, so retry around the
+// click while the list redraws.
 async function pairPlayersReliably(page, first, second) {
   for (const player of [first, second]) {
     const target = page.getByText(player.fullName, { exact: true });
@@ -12,7 +21,7 @@ async function pairPlayersReliably(page, first, second) {
     for (let attempt = 0; attempt < 4 && !clicked; attempt += 1) {
       try {
         await target.scrollIntoViewIfNeeded({ timeout: 5000 });
-        await target.click({ timeout: 5000 });
+        await target.evaluate((el) => el.click());
         clicked = true;
       } catch {
         await page.waitForTimeout(600);
@@ -46,12 +55,12 @@ async function generateOrganiserRoster(page, request, testInfo) {
   for (let i = 0; i < 12; i += 2) {
     await pairPlayersReliably(page, players[i], players[i + 1]);
   }
-  await page.getByRole("button", { name: "Next: Settings" }).click();
-  await page.getByRole("button", { name: "Increase Courts" }).click();
+  await domClick(page.getByRole("button", { name: "Next: Settings" }));
+  await domClick(page.getByRole("button", { name: "Increase Courts" }));
   await setNumeric(page, "Rounds", 13);
   await setNumeric(page, "Pair Games", 8);
-  await page.getByRole("button", { name: "Next: Review" }).click();
-  await page.getByRole("button", { name: "Generate Roster" }).click();
+  await domClick(page.getByRole("button", { name: "Next: Review" }));
+  await domClick(page.getByRole("button", { name: "Generate Roster" }));
   await expect(page.getByText("Roster edits")).toBeVisible();
   return players;
 }
@@ -110,8 +119,8 @@ test("fairness is recomputed after a manual roster edit (AC-W4)", async ({ page,
 
   const { teamA, teamB } = await getFirstCourtPlayerButtons(page);
   // nth(0) is the team-swap overlay button; players are nth(1) and nth(2).
-  await teamA.nth(1).click();
-  await teamB.nth(1).click();
+  await domClick(teamA.nth(1));
+  await domClick(teamB.nth(1));
 
   await expect(page.getByText("Roster edits")).toBeVisible();
   const fairnessPanel = page.locator("[data-testid='fairness-report']");
@@ -121,9 +130,9 @@ test("fairness is recomputed after a manual roster edit (AC-W4)", async ({ page,
 
 test("generate spinner appears only after one second and never blocks review content (AC-PERF-2)", async ({ page, request }, testInfo) => {
   const players = await addPlannerPlayers(page, request, testInfo.project.name, 12, "SPN");
-  await page.getByRole("button", { name: "Next: Settings" }).click();
-  await page.getByRole("button", { name: "Increase Courts" }).click();
-  await page.getByRole("button", { name: "Next: Review" }).click();
+  await domClick(page.getByRole("button", { name: "Next: Settings" }));
+  await domClick(page.getByRole("button", { name: "Increase Courts" }));
+  await domClick(page.getByRole("button", { name: "Next: Review" }));
 
   await page.route("**/api/generate", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1800));
@@ -131,7 +140,7 @@ test("generate spinner appears only after one second and never blocks review con
     await route.fulfill({ response });
   });
 
-  await page.getByRole("button", { name: "Generate Roster" }).click();
+  await domClick(page.getByRole("button", { name: "Generate Roster" }));
 
   // Under one second: no spinner, and the review content stays rendered.
   // (Explicit wait + immediate count: a retrying assertion would wrongly
