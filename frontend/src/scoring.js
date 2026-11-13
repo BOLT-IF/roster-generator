@@ -46,6 +46,9 @@ export function buildPairStandings(rounds, scoresByRound) {
 
   rounds.forEach((round, roundIndex) => {
     round.courts.forEach((court, courtIndex) => {
+      // C-2 AC-F4: friendlies are for fun - they never count toward
+      // league standings or knockout seeding.
+      if (court.friendly) return;
       const score = scoresByRound[roundIndex]?.[courtIndex];
       const teamAKey = court.team_a.join(" & ");
       const teamBKey = court.team_b.join(" & ");
@@ -91,6 +94,8 @@ export function buildIndividualStandings(rounds, scoresByRound) {
 
   rounds.forEach((round, roundIndex) => {
     round.courts.forEach((court, courtIndex) => {
+      // C-2 AC-F4: friendly scores never count toward standings.
+      if (court.friendly) return;
       const score = scoresByRound[roundIndex]?.[courtIndex];
       if (!isScoreComplete(score)) return;
 
@@ -136,7 +141,11 @@ export function buildIndividualStandings(rounds, scoresByRound) {
 
 export function areRoundsComplete(rounds, scoresByRound) {
   return rounds.every((round, roundIndex) =>
-    round.courts.every((_, courtIndex) => isScoreComplete(scoresByRound[roundIndex]?.[courtIndex]))
+    round.courts.every((court, courtIndex) =>
+      // C-2 D7: a friendly's score is optional - an unscored friendly
+      // never blocks ending its round.
+      court.friendly || isScoreComplete(scoresByRound[roundIndex]?.[courtIndex])
+    )
   );
 }
 
@@ -156,7 +165,11 @@ export function areEndedRoundsComplete(rounds, scoresByRound, endedRounds = []) 
       return false;
     }
 
-    return round.courts.every((_, courtIndex) => isScoreComplete(scoresByRound[roundIndex]?.[courtIndex]));
+    return round.courts.every(
+      (court, courtIndex) =>
+        // C-2 D7: friendly scores are optional.
+        court.friendly || isScoreComplete(scoresByRound[roundIndex]?.[courtIndex])
+    );
   });
 }
 
