@@ -1180,6 +1180,30 @@ def _build_knockout_rounds_for_stats(
     if qualifier_count == 2:
         return [_create_knockout_round("Final", base_round + 1, [[seeds[0], seeds[1]]])]
 
+    # C-2 AC-KO1: on a single court the two semifinal matches cannot share a
+    # round - split them across consecutive rounds, then the final. This
+    # mirror must stay in lockstep with the frontend's buildKnockoutRounds
+    # (labels and round numbering included).
+    court_count = len(roster_rounds[0].get("courts", [])) if roster_rounds else None
+    if court_count is not None and court_count < 2:
+        part_one = _create_knockout_round("Semifinals, part 1", base_round + 1, [[seeds[0], seeds[3]]])
+        part_two = _create_knockout_round("Semifinals, part 2", base_round + 2, [[seeds[1], seeds[2]]])
+        rounds = [part_one, part_two]
+        winners = []
+        for part_index, part in enumerate((part_one, part_two)):
+            scores = (
+                knockout_scores_by_round[part_index]
+                if part_index < len(knockout_scores_by_round)
+                else []
+            )
+            winner = None
+            if len(ended_knockout_rounds) > part_index and ended_knockout_rounds[part_index]:
+                winner = _get_match_winner(scores[0] if scores else None, part["courts"][0])
+            winners.append(winner)
+        if winners and all(winners):
+            rounds.append(_create_knockout_round("Final", base_round + 3, [list(winners)]))
+        return rounds
+
     semifinal_round = _create_knockout_round(
         "Semifinals",
         base_round + 1,
@@ -1259,7 +1283,9 @@ def _iter_completed_matches(payload: dict, db, session_id: str):
 def _get_session_completion_state(db, record: SharedSessionRecord, payload: dict):
     draw_config = payload.get("draw_config", {})
     league_total = len(payload.get("roster", {}).get("rounds", []))
-    knockout_total = _planned_knockout_rounds(draw_config, _count_league_pairs(payload))
+    knockout_total = _planned_knockout_rounds(
+        draw_config, _count_league_pairs(payload), _payload_court_count(payload)
+    )
     total_rounds = league_total + knockout_total
     _, ended_league_rounds = _get_round_state(db, record.session_id, "league", league_total)
     _, ended_knockout_rounds = _get_round_state(db, record.session_id, "knockout", knockout_total)
@@ -1747,15 +1773,29 @@ def _count_league_pairs(payload: dict) -> int:
     return len([pair for pair in pairs if pair])
 
 
-def _planned_knockout_rounds(draw_config: dict, pair_count: int) -> int:
+def _planned_knockout_rounds(draw_config: dict, pair_count: int, court_count: int | None = None) -> int:
     if draw_config.get("draw_type") != "league_knockout":
         return 0
     qualifiers = _normalized_qualifier_count(draw_config, pair_count)
     if qualifiers >= 4:
+        # C-2 AC-KO1: the first knockout round holds qualifier_count/2
+        # matches (2 for semifinals). Courts >= 2 hold them together; a
+        # single court splits them across consecutive rounds - two parts
+        # plus the final.
+        if court_count is not None and court_count < 2:
+            return 3
         return 2
     if qualifiers >= 2:
         return 1
     return 0
+
+
+def _payload_court_count(payload: dict) -> int | None:
+    """How many courts the session's roster actually plays on (AC-KO1)."""
+    rounds = payload.get("roster", {}).get("rounds", [])
+    if not rounds:
+        return None
+    return len(rounds[0].get("courts", [])) or None
 
 
 def _serialize_session_summary(record: SharedSessionRecord, db=None) -> SharedSessionSummary:
@@ -1770,7 +1810,9 @@ def _serialize_session_summary(record: SharedSessionRecord, db=None) -> SharedSe
         payload = _hydrate_legacy_session_storage(db_session, record, payload)
         draw_config = payload.get("draw_config", {})
         league_total = len(payload.get("roster", {}).get("rounds", []))
-        knockout_total = _planned_knockout_rounds(draw_config, _count_league_pairs(payload))
+        knockout_total = _planned_knockout_rounds(
+            draw_config, _count_league_pairs(payload), _payload_court_count(payload)
+        )
         total_rounds = league_total + knockout_total
         active_league_round, ended_league_rounds = _get_round_state(db_session, record.session_id, "league", league_total)
         active_knockout_round, ended_knockout_rounds = _get_round_state(db_session, record.session_id, "knockout", knockout_total)

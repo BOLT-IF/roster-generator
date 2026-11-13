@@ -214,6 +214,31 @@ export function buildKnockoutRounds(
     return [createKnockoutRound("Final", baseRound + 1, [[seeds[0], seeds[1]]])];
   }
 
+  // C-2 AC-KO1: on a single court the two semifinal matches cannot share a
+  // round - split across consecutive rounds, then the final. Labels and
+  // round numbering must stay in lockstep with the backend stats mirror
+  // (_build_knockout_rounds_for_stats).
+  const leagueCourts = roster.rounds?.[0]?.courts?.length || 1;
+  if (leagueCourts < 2) {
+    const partOne = createKnockoutRound("Semifinals, part 1", baseRound + 1, [
+      [seeds[0], seeds[3]],
+    ]);
+    const partTwo = createKnockoutRound("Semifinals, part 2", baseRound + 2, [
+      [seeds[1], seeds[2]],
+    ]);
+    const rounds = [partOne, partTwo];
+    const partWinners = [partOne, partTwo].map((part, partIndex) => {
+      const scores = knockoutScoresByRound[partIndex] || [];
+      return endedKnockoutRounds[partIndex]
+        ? getMatchWinner(scores[0], part.courts[0])
+        : null;
+    });
+    if (partWinners.every(Boolean)) {
+      rounds.push(createKnockoutRound("Final", baseRound + 3, [partWinners]));
+    }
+    return rounds;
+  }
+
   const semifinalRound = createKnockoutRound("Semifinals", baseRound + 1, [
     [seeds[0], seeds[3]],
     [seeds[1], seeds[2]],
