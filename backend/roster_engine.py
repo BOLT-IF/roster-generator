@@ -1,6 +1,7 @@
 """Badminton doubles roster generation engine (library, no CLI)."""
 
 import random
+import time
 from collections import Counter
 from itertools import combinations
 
@@ -512,7 +513,8 @@ def _select_resting_set(players, num_resting, must_rest, cannot_rest,
     return best_set
 
 
-def _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target=None):
+def _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target=None,
+                     max_consecutive_rest=None, consecutive_rest_forced=None):
     """Derive structured C-1 fairness issues purely from the roster.
 
     Rules (C-1-REQUIREMENTS.md §5): rest_spread, rest_unit_split,
@@ -614,7 +616,12 @@ def _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target
         for r in rounds:
             if r["round"] < pair_start_round:
                 continue
-            for a, b in r["courts"]:
+            friendly_courts = set(r.get("friendly_courts") or [])
+            for index, (a, b) in enumerate(r["courts"]):
+                # Friendlies are filler, not league meetings (C-2 AC-F4);
+                # they never count toward matchup balance.
+                if index in friendly_courts:
+                    continue
                 ta, tb = frozenset(a), frozenset(b)
                 if ta in pair_sets and tb in pair_sets:
                     matchup_counts[_co_key(a, b)] += 1
@@ -678,13 +685,51 @@ def _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target
                 "unavoidable": False,
             })
 
+    # C-2 D10 / AC-K5: where completing the league forces back-to-back
+    # rests, report them as a fairness issue (never a blocking violation).
+    if max_consecutive_rest is not None:
+        resting_rounds = {}
+        for r in rounds:
+            for p in r["resting"]:
+                resting_rounds.setdefault(p, set()).add(r["round"])
+        affected = []
+        worst_run = 0
+        for p in sorted(players):
+            rounds_in = resting_rounds.get(p, set())
+            if not rounds_in:
+                continue
+            run = 0
+            worst = 0
+            for round_num in range(1, len(rounds) + 1):
+                if round_num in rounds_in:
+                    run += 1
+                    worst = max(worst, run)
+                else:
+                    run = 0
+            if worst > max_consecutive_rest:
+                worst_run = max(worst_run, worst)
+                affected.append(p)
+        if affected:
+            forced = bool(consecutive_rest_forced) if consecutive_rest_forced is not None else None
+            summary = f"{len(affected)} player(s) rest back-to-back (limit {max_consecutive_rest})"
+            if forced:
+                summary += " - unavoidable with this setup (league coverage wins, C-2 D10)"
+            issues.append({
+                "rule": "rest_consecutive",
+                "summary": summary,
+                "affected": affected,
+                "unavoidable": bool(forced),
+            })
+
     return issues, rest_spread, corest_spread, matchup_spread
 
 
-def fairness_report(rounds, players, fixed_pairs, pair_start_round, pair_target=None):
+def fairness_report(rounds, players, fixed_pairs, pair_start_round, pair_target=None,
+                    max_consecutive_rest=None, consecutive_rest_forced=None):
     """C-1 AC-W1: the structured fairness report for a generated roster."""
     issues, rest_spread, corest_spread, matchup_spread = _fairness_issues(
-        rounds, players, fixed_pairs, pair_start_round, pair_target
+        rounds, players, fixed_pairs, pair_start_round, pair_target,
+        max_consecutive_rest, consecutive_rest_forced,
     )
     return {
         "rest_spread": rest_spread,
@@ -1089,8 +1134,275 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
     return rounds, rest_counts, fixed_pair_counts, warnings
 
 
-def generate_fixed_pair_knockout_roster(players, fixed_pairs, num_courts, num_rounds, pair_target):
-    """Generate a strict round-robin league schedule for fixed-pair knockout sessions."""
+def _league_b2b_feasible(pair_count, num_courts, max_consecutive_rest):
+    """Can any schedule avoid a pair resting two (or more) rounds in a row?
+
+    Necessary condition (C-1 v3 §3 rule 2): the resting share must not
+    exceed max_consecutive_rest/(max_consecutive_rest+1). Each court holds
+    TWO pairs, so resting pairs = pair_count - 2*courts. Coverage makes
+    some setups infeasible beyond this formula (e.g. 8 pairs / 2 courts) -
+    the minimization ladder and forced flags report those honestly.
+    """
+    resting_pairs = pair_count - 2 * num_courts
+    if resting_pairs <= 0:
+        return True
+    return resting_pairs * (max_consecutive_rest + 1) <= pair_count * max_consecutive_rest
+
+
+class _LeagueBudgetExceeded(Exception):
+    pass
+
+
+def _plan_league_schedule(pairs, num_courts, meetings, max_consecutive_rest, rng,
+                          application_budget=480000, candidate_cap=250,
+                          deadline_seconds=7.0):
+    """C-2: plan the league stage with fixed pairs as units (backtracking).
+
+    Every pair-vs-pair matchup must be played exactly `meetings` times -
+    the hard rule (C-2-REQUIREMENTS D1/D10). Each round fills all courts
+    with league matches; the final round leaves spare slots for friendlies
+    (filled by the caller). Relaxation ladder per C-2 §4:
+
+        T1  no-rematch-consecutive (D6) + no back-to-back rest
+            + rest-count spread <= 1 + co-rest spread <= 1
+        T2  no-rematch-consecutive + no back-to-back rest + spread <= 1
+        T3  no-rematch-consecutive + no back-to-back rest
+        T4  no-rematch-consecutive (back-to-back minimized by ordering)
+        T5  coverage only (both minimized by ordering)
+
+    Returns (schedule, forced) - schedule is a list of
+    {"matches": [(pair, pair), ...]} per round (forced is a list of rule
+    names the winning tier could not keep), or (None, ["coverage"]) when
+    even coverage fails within budget (the caller falls back to greedy).
+    """
+    pair_list = [tuple(p) for p in pairs]
+    n = len(pair_list)
+    remaining = {}
+    for i in range(n):
+        for j in range(i + 1, n):
+            remaining[_co_key(pair_list[i], pair_list[j])] = meetings
+    total_matches = n * (n - 1) // 2 * meetings
+    co_keys = [_co_key(a, b) for a, b in combinations(pair_list, 2)]
+    co_pool = len(co_keys)
+
+    # Relaxation ladder in C-2 §4 precedence order: the LOWEST priority
+    # rule gives way first. §4: coverage > no-back-to-back-rest >
+    # rest-count spread > co-rest variety > no-rematch-consecutive (D6).
+    # Back-to-back rest is never dropped outright - when unavoidable it is
+    # minimized (D10) through the capped tiers.
+    tiers = [
+        {"rematch": True, "b2b": True, "spread": True, "co": True},
+        {"b2b": True, "spread": True, "co": True},
+        {"b2b": True, "spread": True},
+        {"b2b": True},
+    ]
+    # Minimization ladder (C-2 D10): when a back-to-back-free schedule is
+    # not achievable (or not found), find the smallest achievable total of
+    # back-to-back round-overlaps rather than accepting whatever the greedy
+    # pass produces. Small caps first; each attempt gets a slice of the
+    # budget and the remaining wall-clock.
+    for cap in range(1, 13):
+        tiers.append({"b2b_cap": cap})
+    tiers.append({})
+
+    def dfs(rem, rests, co, prev_keys, prev_rest, b2b_total, flags, budget):
+        if not rem:
+            if flags.get("spread") and rests:
+                vals = list(rests.values())
+                if max(vals) - min(vals) > 1:
+                    return None
+            if flags.get("co") and co_pool:
+                vals = [co.get(k, 0) for k in co_keys]
+                if max(vals) - min(vals) > 1:
+                    return None
+            return []
+        budget[0] -= 1
+        if budget[0] < 0 or time.monotonic() > budget[1]:
+            raise _LeagueBudgetExceeded()
+
+        keys = sorted(k for k, c in rem.items() if c > 0)
+        k_matches = min(num_courts, len(keys))
+
+        combos = []
+
+        def pick(start, chosen, used_pairs):
+            if len(chosen) == k_matches:
+                combos.append(list(chosen))
+                return
+            for idx in range(start, len(keys)):
+                key = keys[idx]
+                a, b = key
+                if a in used_pairs or b in used_pairs:
+                    continue
+                chosen.append(key)
+                pick(idx + 1, chosen, used_pairs | {a, b})
+                chosen.pop()
+
+        pick(0, [], frozenset())
+
+        scored = []
+        for combo in combos:
+            if flags.get("rematch") and any(k in prev_keys for k in combo):
+                continue
+            playing = {p for k in combo for p in k}
+            resting = [p for p in pair_list if p not in playing]
+            round_b2b = sum(1 for p in resting if p in prev_rest)
+            if flags.get("b2b") and round_b2b:
+                continue
+            if "b2b_cap" in flags and b2b_total + round_b2b > flags["b2b_cap"]:
+                continue
+            new_rests = {p: rests[p] + (1 if p in resting else 0) for p in pair_list}
+            if flags.get("spread"):
+                vals = list(new_rests.values())
+                if max(vals) - min(vals) > 1:
+                    continue
+            b2b_cost = round_b2b
+            co_cost = 0
+            if len(resting) >= 2:
+                rk = [_co_key(x, y) for x, y in combinations(sorted(resting), 2)]
+                co_cost = max((co.get(k, 0) + 1 for k in rk), default=0)
+            if not flags.get("spread") and not flags.get("co"):
+                # Minimal tiers: bias only by back-to-back avoidance and the
+                # seed - richer orderings can starve exactly the solutions
+                # these tiers exist to find.
+                scored.append(((b2b_cost, rng.random()), combo, new_rests, tuple(resting)))
+            else:
+                scored.append((
+                    (b2b_cost, co_cost, sum(new_rests[p] for p in resting), rng.random()),
+                    combo, new_rests, tuple(resting),
+                ))
+        scored.sort(key=lambda item: item[0])
+        for _, combo, new_rests, resting in scored[:candidate_cap]:
+            new_rem = dict(rem)
+            for k in combo:
+                new_rem[k] -= 1
+                if new_rem[k] == 0:
+                    del new_rem[k]
+            new_co = dict(co)
+            if len(resting) >= 2:
+                for x, y in combinations(sorted(resting), 2):
+                    key = _co_key(x, y)
+                    new_co[key] = new_co.get(key, 0) + 1
+                if flags.get("co") and new_co:
+                    events = sum(new_co.values())
+                    allowed_max = events // co_pool + 1
+                    if max(new_co.values()) > allowed_max:
+                        continue
+            tail = dfs(new_rem, new_rests, new_co, frozenset(combo), frozenset(resting),
+                       b2b_total + b2b_cost, flags, budget)
+            if tail is not None:
+                return [{"matches": combo, "resting": list(resting)}] + tail
+        return None
+
+    deadline = time.monotonic() + deadline_seconds
+    tier_index = 0
+    for flags in tiers:
+        tier_index += 1
+        is_final = tier_index == len(tiers)
+        # Tier exits are driven by APPLICATION BUDGETS, not time slices:
+        # the same seed must produce the same schedule on a fast laptop
+        # and a slow CI runner. Budgets are deliberately small: configs a
+        # quality tier can satisfy at all (6p/2c, 8p/3c, ...) satisfy it
+        # within a few thousand applications, while genuinely-forced
+        # configs fail fast instead of burning the slow runner's clock -
+        # the earlier large budgets starved later tiers on slow machines
+        # (measured: CI failed 8p/3c that passes in 52ms locally). The
+        # single global deadline stays as the emergency backstop (AC-P1).
+        if tier_index <= 4:
+            slice_budget = max(application_budget // 60, 6000)
+        elif is_final:
+            slice_budget = max(application_budget // 60, 6000)
+        else:
+            slice_budget = max(application_budget // 160, 1500)
+        tier_deadline = deadline if is_final else deadline - 0.75
+        budget = [slice_budget, tier_deadline]
+        try:
+            plan = dfs(
+                dict(remaining),
+                {p: 0 for p in pair_list},
+                {},
+                frozenset(),
+                frozenset(),
+                0,
+                flags,
+                budget,
+            )
+        except _LeagueBudgetExceeded:
+            plan = None
+        if plan is not None:
+            # Report what the winning tier could not keep: back-to-back
+            # rests (never traded unless forced) and rest-count spread.
+            forced = []
+            if not flags.get("b2b"):
+                forced.append("b2b")
+            if not flags.get("spread") and n > 2 * num_courts:
+                forced.append("spread")
+            return plan, forced
+    return None, ["coverage"]
+
+
+def _greedy_league_plan(pairs, num_courts, meetings, rng):
+    """Coverage-complete fallback: fill courts with any disjoint remaining
+    matches, rematch-aware, randomized. Used only if the search budget is
+    exhausted; coverage is always achievable by construction."""
+    pair_list = [tuple(p) for p in pairs]
+    remaining = {}
+    for i in range(len(pair_list)):
+        for j in range(i + 1, len(pair_list)):
+            remaining[_co_key(pair_list[i], pair_list[j])] = meetings
+    plan = []
+    prev_keys = frozenset()
+    while remaining:
+        keys = sorted(remaining)
+        rng.shuffle(keys)
+        chosen = []
+        used = set()
+        for key in keys:
+            a, b = key
+            if a in used or b in used or key in prev_keys:
+                continue
+            chosen.append(key)
+            used.update((a, b))
+            if len(chosen) == num_courts:
+                break
+        if not chosen:
+            # Only rematches left this round (degenerate meetings > 2);
+            # take any disjoint match to guarantee progress.
+            for key in keys:
+                a, b = key
+                if a not in used and b not in used:
+                    chosen.append(key)
+                    used.update((a, b))
+                    if len(chosen) == num_courts:
+                        break
+        for key in chosen:
+            remaining[key] -= 1
+            if remaining[key] == 0:
+                del remaining[key]
+        prev_keys = frozenset(chosen)
+        resting = [p for p in pair_list if p not in used]
+        plan.append({"matches": chosen, "resting": resting})
+    return plan
+
+
+def generate_fixed_pair_knockout_roster(players, fixed_pairs, num_courts, num_rounds,
+                                        pair_target, league_meetings=1, seed=None,
+                                        max_consecutive_rest=1):
+    """Generate a league schedule for fixed-pair knockout sessions (C-2).
+
+    The league is planned with pairs as units: every pair-vs-pair matchup
+    happens exactly league_meetings times (hard rule), with C-1-style
+    fairness on top (no back-to-back rests where avoidable, rest-count
+    spread, co-rest variety, no rematch in consecutive rounds, seeded
+    variety). Rounds are derived as ceil(league matches / courts); the
+    num_rounds argument is accepted for compatibility and ignored
+    (C-2 AC-R3). Spare court slots in the final round become friendlies
+    between the most-rested resting pairs (D2/D4).
+
+    Returns (rounds, rest_counts, fixed_pair_counts, warnings, notes):
+    rounds entries carry "friendly_courts" (court indices of friendlies);
+    notes carries {"consecutive_rest_forced": bool} for the fairness report.
+    """
     normalized_players = sorted(players)
     normalized_pairs = [_normalize_pair(pair) for pair in fixed_pairs]
 
@@ -1106,86 +1418,116 @@ def generate_fixed_pair_knockout_roster(players, fixed_pairs, num_courts, num_ro
     team_count = len(normalized_pairs)
     if team_count < 2:
         raise RosterError("Need at least 2 fixed pairs for league + knockout scheduling.")
-
-    teams_with_bye = list(normalized_pairs)
-    if team_count % 2 == 1:
-        teams_with_bye.append(None)
-
-    base_rounds = len(teams_with_bye) - 1
-    matches_per_round = team_count // 2
-
-    if num_courts != matches_per_round:
+    if num_courts < 1:
+        raise RosterError("League + knockout scheduling requires at least 1 court.")
+    if num_courts > team_count // 2:
+        # Each court hosts two pairs; more courts than pair_count//2 would
+        # leave courts structurally empty every round.
         raise RosterError(
-            f"League + knockout scheduling requires exactly {matches_per_round} court(s) for {team_count} fixed pair(s), "
-            f"but {num_courts} provided."
-        )
-    if num_rounds % base_rounds != 0:
-        raise RosterError(
-            f"League + knockout scheduling requires rounds to be a multiple of {base_rounds} for {team_count} fixed pair(s), "
-            f"but {num_rounds} provided."
+            f"League + knockout scheduling needs at most {team_count // 2} court(s) "
+            f"for {team_count} fixed pair(s), but {num_courts} provided."
         )
 
-    meetings = num_rounds // base_rounds
-    expected_pair_target = (team_count - 1) * meetings
-    if pair_target != expected_pair_target:
-        raise RosterError(
-            f"League + knockout scheduling requires pair_games={expected_pair_target} for {team_count} fixed pair(s) "
-            f"across {meetings} meeting(s), but {pair_target} provided."
-        )
+    meetings = int(league_meetings)
+    if meetings < 1:
+        raise RosterError("League + knockout scheduling requires league_meetings >= 1.")
 
-    cycle_rounds = []
-    rotation = list(teams_with_bye)
-    for _ in range(base_rounds):
-        matches = []
-        resting_team = None
-        for index in range(len(rotation) // 2):
-            first_team = rotation[index]
-            second_team = rotation[-(index + 1)]
-            if first_team is None:
-                resting_team = second_team
-                continue
-            if second_team is None:
-                resting_team = first_team
-                continue
-            matches.append((first_team, second_team))
+    rng = random.Random(seed)
+    plan, forced = _plan_league_schedule(
+        normalized_pairs, num_courts, meetings, max_consecutive_rest, rng
+    )
+    if plan is None:
+        plan = _greedy_league_plan(normalized_pairs, num_courts, meetings, rng)
+        forced = ["b2b", "spread"]
 
-        cycle_rounds.append({
-            "matches": matches,
-            "resting_team": resting_team,
+    # Assemble rounds: league matches first, friendlies in spare slots,
+    # resting = pairs on no court at all.
+    rests = {pair: 0 for pair in normalized_pairs}
+    games = {pair: 0 for pair in normalized_pairs}
+    rounds = []
+    resting_rounds = {pair: [] for pair in normalized_pairs}
+
+    for round_index, entry in enumerate(plan):
+        matches = list(entry["matches"])
+        playing = {p for k in matches for p in k}
+        spare = num_courts - len(matches)
+        friendly = []
+        if spare > 0:
+            idle = [p for p in normalized_pairs if p not in playing]
+            # D4: the friendly goes to the pairs with the most rests so far,
+            # then the fewest games; the seed breaks ties.
+            idle.sort(key=lambda p: (-rests[p], games[p], rng.random()))
+            for _ in range(spare):
+                if len(idle) < 2:
+                    break
+                a = idle.pop(0)
+                b = idle.pop(0)
+                friendly.append((a, b))
+
+        courts = [
+            (tuple(sorted(a)), tuple(sorted(b)))
+            for a, b in matches + friendly
+        ]
+        on_court = {p for k in matches + friendly for p in k}
+        resting_pairs = [p for p in normalized_pairs if p not in on_court]
+        for p in resting_pairs:
+            rests[p] += 1
+            resting_rounds[p].append(round_index)
+        for a, b in courts:
+            games[tuple(sorted(a))] += 1
+            games[tuple(sorted(b))] += 1
+
+        rounds.append({
+            "round": round_index + 1,
+            "courts": courts,
+            "resting": sorted(player for pair in resting_pairs for player in pair),
+            "friendly_courts": list(range(len(matches), len(courts))),
         })
 
-        anchor = rotation[0]
-        rotated = [rotation[-1], *rotation[1:-1]]
-        rotation = [anchor, *rotated]
+    rest_counts = {}
+    for pair in normalized_pairs:
+        rest_counts[pair[0]] = rests[pair]
+        rest_counts[pair[1]] = rests[pair]
+    fixed_pair_counts = {pair: games[pair] for pair in normalized_pairs}
 
-    rounds = []
-    rest_counts = {player: 0 for player in normalized_players}
-    fixed_pair_counts = {pair: expected_pair_target for pair in normalized_pairs}
-
-    round_number = 1
-    for meeting_index in range(meetings):
-        for cycle_round in cycle_rounds:
-            courts = []
-            for first_team, second_team in cycle_round["matches"]:
-                if meeting_index % 2 == 0:
-                    courts.append((first_team, second_team))
+    warnings = []
+    if "b2b" in forced:
+        formula_forced = not _league_b2b_feasible(team_count, num_courts, max_consecutive_rest)
+        search_limited = not formula_forced
+        seen_runs = set()
+        for pair in normalized_pairs:
+            resting_set = set(resting_rounds[pair])
+            run = 0
+            worst = 0
+            for round_index in range(len(plan)):
+                if round_index in resting_set:
+                    run += 1
+                    if run > worst:
+                        worst = run
                 else:
-                    courts.append((second_team, first_team))
+                    run = 0
+            if worst > max_consecutive_rest and (pair, worst) not in seen_runs:
+                seen_runs.add((pair, worst))
+                message = (
+                    f"consecutive_rest: {pair[0]} & {pair[1]} rested {worst} consecutive "
+                    f"rounds (limit {max_consecutive_rest})"
+                )
+                if formula_forced:
+                    message += " - unavoidable with this setup (league coverage wins)"
+                elif search_limited:
+                    message += " - the search could not avoid these on this seed; try another seed"
+                warnings.append(message)
 
-            resting = []
-            if cycle_round["resting_team"] is not None:
-                resting = list(cycle_round["resting_team"])
-                for player in resting:
-                    rest_counts[player] += 1
-
-            rounds.append({
-                "round": round_number,
-                "courts": courts,
-                "resting": sorted(resting),
-            })
-            round_number += 1
-
-    return rounds, rest_counts, fixed_pair_counts, []
+    notes = {
+        # True only when the setup's arithmetic makes back-to-back rests
+        # unavoidable (rest share beyond the limit) - never merely because
+        # the search failed to find a better schedule on this seed.
+        "consecutive_rest_forced": "b2b" in forced
+        and not _league_b2b_feasible(team_count, num_courts, max_consecutive_rest),
+        "b2b_search_limited": "b2b" in forced
+        and _league_b2b_feasible(team_count, num_courts, max_consecutive_rest),
+    }
+    return rounds, rest_counts, fixed_pair_counts, warnings, notes
 
 
 def find_duplicate_fixed_pair_matchups(rounds, fixed_pairs):
@@ -1197,7 +1539,11 @@ def find_duplicate_fixed_pair_matchups(rounds, fixed_pairs):
     seen_matchups = {}
     violations = []
     for round_data in rounds:
-        for team_a, team_b in round_data.get("courts", []):
+        friendly_courts = set(round_data.get("friendly_courts") or [])
+        for court_index, (team_a, team_b) in enumerate(round_data.get("courts", [])):
+            # Friendlies never count toward league duplicate accounting (C-2 AC-F4).
+            if court_index in friendly_courts:
+                continue
             normalized_team_a = _normalize_pair(team_a)
             normalized_team_b = _normalize_pair(team_b)
             if normalized_team_a not in normalized_pairs or normalized_team_b not in normalized_pairs:

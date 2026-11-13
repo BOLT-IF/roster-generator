@@ -25,12 +25,13 @@ class KnockoutFixedPairTests(unittest.TestCase):
         players = ["A", "B", "C", "D", "E", "F", "G", "H"]
         fixed_pairs = [("A", "B"), ("C", "D"), ("E", "F"), ("G", "H")]
 
-        rounds, rest_counts, fixed_pair_counts, warnings = generate_fixed_pair_knockout_roster(
+        rounds, rest_counts, fixed_pair_counts, warnings, _ = generate_fixed_pair_knockout_roster(
             players=players,
             fixed_pairs=fixed_pairs,
             num_courts=2,
             num_rounds=3,
             pair_target=3,
+            league_meetings=1,
         )
 
         self.assertEqual(len(rounds), 3)
@@ -44,12 +45,13 @@ class KnockoutFixedPairTests(unittest.TestCase):
         players = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
         fixed_pairs = [("A", "B"), ("C", "D"), ("E", "F"), ("G", "H"), ("I", "J")]
 
-        rounds, rest_counts, fixed_pair_counts, warnings = generate_fixed_pair_knockout_roster(
+        rounds, rest_counts, fixed_pair_counts, warnings, _ = generate_fixed_pair_knockout_roster(
             players=players,
             fixed_pairs=fixed_pairs,
             num_courts=2,
             num_rounds=5,
             pair_target=4,
+            league_meetings=1,
         )
 
         self.assertEqual(len(rounds), 5)
@@ -64,12 +66,13 @@ class KnockoutFixedPairTests(unittest.TestCase):
         players = ["A", "B", "C", "D", "E", "F", "G", "H"]
         fixed_pairs = [("A", "B"), ("C", "D"), ("E", "F"), ("G", "H")]
 
-        rounds, _, fixed_pair_counts, _ = generate_fixed_pair_knockout_roster(
+        rounds, _, fixed_pair_counts, _, _ = generate_fixed_pair_knockout_roster(
             players=players,
             fixed_pairs=fixed_pairs,
             num_courts=2,
             num_rounds=6,
             pair_target=6,
+            league_meetings=2,
         )
 
         self.assertEqual(len(rounds), 6)
