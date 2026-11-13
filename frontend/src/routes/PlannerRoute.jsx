@@ -297,21 +297,10 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
               description="Generate the roster, review the rounds, then start the session."
               tone={roster ? "slate" : "default"}
             >
-              {loading ? (
-                <div className="py-8 text-center">
-                  <svg className="mx-auto mb-4 h-12 w-12 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  <p className={`${roster ? "text-slate-200" : "text-gray-700"} font-medium`}>{timing.loadingText()}</p>
-                  {timing.elapsed >= 5 ? (
-                    <p className={`mt-2 text-sm ${roster ? "text-slate-400" : "text-gray-400"}`}>
-                      First request may take up to 30s while the server wakes up
-                    </p>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="space-y-4">
+              {/* AC-PERF-2: the review content stays rendered while a slow
+                  generate runs; a spinner appears on the button itself only
+                  after one second, so fast generations never flash it. */}
+              <div className="space-y-4">
                   {generateError ? (
                     <div className={`rounded-xl border px-4 py-3 text-sm ${
                       roster ? "border-rose-300 bg-rose-50 text-rose-700" : "border-rose-200 bg-rose-50 text-rose-700"
@@ -388,8 +377,21 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                       disabled={loading || selectedPlayerIds.length < 4 || Boolean(configIssue)}
                       className="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
                     >
-                      {roster ? (isRosterStale ? "Regenerate Updated Roster" : "Regenerate Roster") : "Generate Roster"}
+                      {loading && timing.elapsed >= 1 ? (
+                        <span data-testid="generate-spinner" className="inline-flex items-center gap-2">
+                          <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          {timing.loadingText()}
+                        </span>
+                      ) : roster ? (isRosterStale ? "Regenerate Updated Roster" : "Regenerate Roster") : "Generate Roster"}
                     </button>
+                    {loading && timing.elapsed >= 5 ? (
+                      <p className={`text-xs ${roster ? "text-slate-400" : "text-gray-400"}`}>
+                        First request may take up to 30s while the server wakes up
+                      </p>
+                    ) : null}
                     {roster ? <DownloadCSV data={roster} /> : null}
                     <button
                       type="button"
@@ -414,7 +416,6 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
                     </button>
                   </div>
                 </div>
-              )}
             </PlannerStepCard>
 
             {roster ? (
