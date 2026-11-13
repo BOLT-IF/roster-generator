@@ -1,4 +1,53 @@
+import { useEffect, useState } from "react";
 import { appCopy } from "../content/uiCopy";
+import { fetchDeployInfo } from "../api";
+
+function shortSha(sha) {
+  return sha ? sha.slice(0, 7) : "?";
+}
+
+function DeployStatusBadge({ info }) {
+  if (!info || !info.deployed_sha) return null;
+
+  const title = [
+    `deployed ${info.deployed_sha}`,
+    info.latest_main_sha ? `main ${info.latest_main_sha}` : null,
+    info.latest_main_at ? `main at ${new Date(info.latest_main_at).toLocaleString()}` : null,
+  ]
+    .filter(Boolean)
+    .join(" \u00b7 ");
+
+  const upToDate = info.status === "up_to_date";
+  const behind = info.status === "behind" && typeof info.ahead_by === "number";
+
+  const styles = upToDate
+    ? "border-green-200 bg-green-50 text-green-700"
+    : behind
+      ? "border-amber-300 bg-amber-50 text-amber-800"
+      : "border-gray-200 bg-gray-50 text-gray-500";
+
+  return (
+    <span
+      data-testid="deploy-status"
+      title={title}
+      className={`inline-flex min-h-8 items-center rounded-full border px-3 py-1 text-xs font-semibold ${styles}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`mr-1.5 h-2 w-2 rounded-full ${
+          upToDate ? "bg-green-500" : behind ? "bg-amber-500" : "bg-gray-400"
+        }`}
+      />
+      {upToDate
+        ? `Deployed \u00b7 ${shortSha(info.deployed_sha)}`
+        : behind
+          ? `Behind ${info.ahead_by} \u00b7 ${shortSha(info.deployed_sha)}`
+          : info.status === "behind"
+            ? `Behind \u00b7 ${shortSha(info.deployed_sha)}`
+            : `Deploy status unknown \u00b7 ${shortSha(info.deployed_sha)}`}
+    </span>
+  );
+}
 
 function BrandIcon({ className = "h-10 w-10" }) {
   return (
@@ -113,6 +162,22 @@ export default function AppShell({
   navItems,
   children,
 }) {
+  const [deployInfo, setDeployInfo] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchDeployInfo()
+      .then((info) => {
+        if (!cancelled) setDeployInfo(info);
+      })
+      .catch(() => {
+        // No badge rather than a broken one.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/95 backdrop-blur">
@@ -129,16 +194,19 @@ export default function AppShell({
               </div>
             </button>
 
-            <button
-              type="button"
-              onClick={onToggleMobileNav}
-              aria-expanded={mobileNavOpen}
-              aria-controls="mobile-global-nav"
-              aria-label="Open navigation"
-              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 md:hidden"
-            >
-              <MenuIcon open={mobileNavOpen} />
-            </button>
+            <div className="flex items-center gap-2">
+              <DeployStatusBadge info={deployInfo} />
+              <button
+                type="button"
+                onClick={onToggleMobileNav}
+                aria-expanded={mobileNavOpen}
+                aria-controls="mobile-global-nav"
+                aria-label="Open navigation"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 md:hidden"
+              >
+                <MenuIcon open={mobileNavOpen} />
+              </button>
+            </div>
           </div>
 
           <nav className="mt-4 hidden flex-wrap gap-2 md:flex">
