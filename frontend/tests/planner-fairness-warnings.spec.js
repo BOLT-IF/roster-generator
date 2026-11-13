@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { addPlannerPlayers, getFirstCourtPlayerButtons } from "./helpers/planner";
+import { createPlayer } from "./helpers/session";
+
+const PLANNER_STORAGE_KEY = "badminton-roster:planner";
 
 // Slow CI runners can stall Playwright's actionability checks (visible /
 // enabled / stable) indefinitely on these small setup targets, even when
@@ -11,26 +14,55 @@ async function domClick(locator) {
   await locator.evaluate((el) => el.click());
 }
 
-// Pairing six pairs in a row re-renders the selected-players list after
-// every pairing; later cards may still be settling, so retry around the
-// click while the list redraws.
-async function pairPlayersReliably(page, first, second) {
-  for (const player of [first, second]) {
-    const target = page.getByText(player.fullName, { exact: true });
-    let clicked = false;
-    for (let attempt = 0; attempt < 4 && !clicked; attempt += 1) {
-      try {
-        await target.scrollIntoViewIfNeeded({ timeout: 5000 });
-        await target.evaluate((el) => el.click());
-        clicked = true;
-      } catch {
-        await page.waitForTimeout(600);
-      }
-    }
-    if (!clicked) {
-      throw new Error(`could not click ${player.fullName} in the pairing list`);
-    }
+// Pairing six pairs through the UI clicks 24 cards through a list that
+// re-renders after every pairing - three CI runners in a row timed out
+// there. The pairing UI itself is covered by planner-pair-dissolve and
+// planner-roster-editing; this spec cares about the fairness panel, so it
+// seeds the planner state (selection + pairs) directly into localStorage
+// before the app boots - deterministic and fast on any runner.
+async function seedPlannerWithPairs(page, request, testInfo, count, prefix) {
+  const players = [];
+  for (let index = 1; index <= count; index += 1) {
+    players.push(
+      await createPlayer(request, {
+        fullName: `${prefix} Player ${index} ${testInfo.project.name}`,
+        shortName: `${prefix}${index}${testInfo.project.name}`,
+      })
+    );
   }
+  const ids = players.map((player) => player.player_id);
+  const fixedPairIds = [];
+  for (let index = 0; index < count; index += 2) {
+    fixedPairIds.push([ids[index], ids[index + 1]].sort());
+  }
+  const state = {
+    selectedPlayerIds: ids,
+    fixedPairIds,
+    config: {
+      draw_type: "round_robin",
+      league_meetings: 1,
+      knockout_qualifiers: 4,
+      num_courts: 1,
+      rounds: 10,
+      pair_games: 3,
+      // Pair Start Round 1 matches the field-scenario shape (the UI default
+      // of 5 splits the co-rest phases and adds warnings this spec isn't
+      // about).
+      pair_start_round: 1,
+      max_consecutive_rest: 1,
+      limits: {},
+      court_numbers: ["1"],
+      seed: 1,
+    },
+    roster: null,
+    generatedRosterBaseline: null,
+    rosterSignature: null,
+    hasManualRosterEdits: false,
+  };
+  await page.addInitScript((payload) => {
+    window.localStorage.setItem(payload.key, JSON.stringify(payload.state));
+  }, { key: PLANNER_STORAGE_KEY, state });
+  return players;
 }
 
 // C-1 PR3 (AC-W2..W4, PERF-2): the planner surfaces the structured fairness
@@ -51,10 +83,9 @@ async function setNumeric(page, label, value) {
 // pair target 8 - every match pair-vs-pair, with 26 matches over 15
 // matchups forcing an unavoidable 11x2 + 4x1 split.
 async function generateOrganiserRoster(page, request, testInfo) {
-  const players = await addPlannerPlayers(page, request, testInfo.project.name, 12, "FRW");
-  for (let i = 0; i < 12; i += 2) {
-    await pairPlayersReliably(page, players[i], players[i + 1]);
-  }
+  const players = await seedPlannerWithPairs(page, request, testInfo, 12, "FRW");
+  await page.goto("/");
+  await expect(page.getByText(players[0].short_name, { exact: false }).first()).toBeVisible();
   await domClick(page.getByRole("button", { name: "Next: Settings" }));
   await domClick(page.getByRole("button", { name: "Increase Courts" }));
   await setNumeric(page, "Rounds", 13);
