@@ -249,6 +249,7 @@ export function getLeagueRequestPayload(players, fixedPairs, config) {
     players,
     fixed_pairs: fixedPairs,
     draw_type: config.draw_type,
+    league_meetings: config.league_meetings,
     num_courts: config.num_courts,
     court_numbers: config.court_numbers,
     rounds: config.rounds,
