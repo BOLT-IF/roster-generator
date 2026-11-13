@@ -174,12 +174,13 @@ class RestFairnessTests(unittest.TestCase):
                 )
 
     def test_ac_f2_active_pairs_rest_as_a_unit(self):
-        # 10 players in 5 pairs, 2 courts: whoever rests, rests as a whole pair.
+        # 10 players in 5 pairs, 2 courts, unreachable together-target: the
+        # pair never dissolves, so whoever rests, rests as a whole pair.
         players = [f"U{i}" for i in range(1, 11)]
         pairs = [(players[i], players[i + 1]) for i in range(0, 10, 2)]
         rounds, _, _, _ = generate_roster(
             players, 2, 13, {}, pairs,
-            pair_target=10, max_consecutive_rest=1, pair_start_round=1, seed=11,
+            pair_target=20, max_consecutive_rest=1, pair_start_round=1, seed=11,
         )
         pair_sets = {frozenset(p) for p in pairs}
         for r in rounds:
@@ -331,6 +332,52 @@ class LimitPrecedenceTests(unittest.TestCase):
         rest_spread_warnings = [w for w in warnings if w.startswith("rest_spread")]
         self.assertTrue(rest_spread_warnings, "rest_spread warning missing")
         self.assertIn("L1", " ".join(rest_spread_warnings))
+
+
+class PairDissolutionTests(unittest.TestCase):
+    """C-1 v2: a pair dissolves once it completes its pair_games target.
+
+    After the target the two players are independent for courts AND rests
+    ("open to be random"); accidental re-pairing on a court is allowed.
+    Before the target (and in pure-pair sessions where the target is never
+    reached) the pair stays one rest unit - covered by RestFairnessTests.
+    """
+
+    def test_pairs_dissolve_after_target(self):
+        # 14 players, 3 courts, 3 pairs targeting 4 games together: the
+        # pairs complete around round 5 and dissolve for the rest of the
+        # session.
+        players = [f"V{i}" for i in range(1, 15)]
+        pairs = [(players[i], players[i + 1]) for i in range(0, 6, 2)]
+        for seed in (1, 2, 3):
+            with self.subTest(seed=seed):
+                rounds, rest_counts, fpc, warnings = generate_roster(
+                    players, 3, 13, {}, pairs,
+                    pair_target=4, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                )
+                for pair, count in fpc.items():
+                    self.assertTrue(
+                        4 <= count <= 5,
+                        f"{pair} played together {count}x (target 4)",
+                    )
+                # After dissolution, members rest independently: some later
+                # round rests exactly one member of a completed pair.
+                completed = [p for p in pairs if fpc.get(p, 0) >= 4]
+                independent_rests = 0
+                for r in rounds:
+                    if r["round"] <= 6:
+                        continue
+                    resting = set(r["resting"])
+                    for pair in completed:
+                        if len(resting & set(pair)) == 1:
+                            independent_rests += 1
+                self.assertGreater(
+                    independent_rests, 0,
+                    "dissolved pair members must be able to rest alone",
+                )
+                # With pairs dissolved, everyone rotates: rest spread <= 1.
+                vals = [rest_counts[p] for p in players]
+                self.assertLessEqual(max(vals) - min(vals), 1)
 
 
 class MatchupFairnessTests(unittest.TestCase):

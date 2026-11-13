@@ -134,13 +134,11 @@ class PairsOnThreeCourtsTests(_FieldScenarioTest):
                     self.assertLessEqual(fairness["corest_spread"], 1)
                     self.assertLessEqual(fairness["matchup_spread"], 1)
                     rules = _warning_rules(body)
-                    if players_n == 13:
-                        # One rest slot: a pair needs two, so paired players
-                        # structurally never rest. The warning is the honest
-                        # report of that, and it is the ONLY warning allowed.
-                        self.assertEqual(rules, {"rest_spread"})
-                    else:
-                        self.assertEqual(rules, set())
+                    # v2 pair semantics: pairs dissolve after completing
+                    # their together-target, so even the 13-player shape
+                    # (one rest slot) rotates everyone once the 3 pairs
+                    # finish their 4 games - all warning-free.
+                    self.assertEqual(rules, set())
                     round1_sets.add(tuple(sorted(body["rounds"][0]["resting"])))
                 self.assertGreaterEqual(len(round1_sets), 2, "round-1 resters must vary by seed")
 
