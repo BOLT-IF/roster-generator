@@ -38,7 +38,7 @@ CLIENT = None
 
 
 def _generate(tag, players_n, courts, rounds, pairs_n, pair_games,
-              draw_type="round_robin", seed=1):
+              draw_type="round_robin", seed=1, league_meetings=None):
     players = [f"{tag}-{i}" for i in range(1, players_n + 1)]
     pairs = [[players[i], players[i + 1]] for i in range(0, 2 * pairs_n, 2)]
     payload = {
@@ -54,6 +54,8 @@ def _generate(tag, players_n, courts, rounds, pairs_n, pair_games,
         "draw_type": draw_type,
         "seed": seed,
     }
+    if league_meetings is not None:
+        payload["league_meetings"] = league_meetings
     start = time.monotonic()
     response = CLIENT.post("/api/generate", json=payload)
     elapsed = time.monotonic() - start
@@ -226,7 +228,7 @@ class LeagueKnockoutFieldTests(_FieldScenarioTest):
 
     def test_scenario_3_five_pairs_league_knockout(self):
         players, pairs, response, elapsed = _generate(
-            "S3", 10, 2, 10, 5, 8, draw_type="league_knockout", seed=1
+            "S3", 10, 2, 10, 5, 8, draw_type="league_knockout", seed=1, league_meetings=2
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertLess(elapsed, TIME_BUDGET_S)
@@ -245,17 +247,39 @@ class LeagueKnockoutFieldTests(_FieldScenarioTest):
         )
         self.assertEqual(_warning_rules(body), set())
 
-    def test_scenario_4_six_pairs_league_knockout_rejects_cleanly(self):
-        # C-2 capability gap: 6 pairs need 3 courts in the strict cycle
-        # scheduler. Until C-2 stretches cycle rounds, the API must reject
-        # with a clean 422 and an actionable message - never a 500. When
-        # C-2 lands, replace this with a success-path test.
-        players, _, response, elapsed = _generate(
-            "S4", 12, 2, 10, 6, 8, draw_type="league_knockout", seed=1
+    def test_scenario_4_six_pairs_league_knockout_works_on_two_courts(self):
+        # C-2 landed: 6 pairs on 2 courts Play Once generates - 8 league
+        # rounds, exact round-robin coverage, one friendly in the spare
+        # slot, no back-to-back rests, and forced-rest issues never block.
+        players, pairs, response, elapsed = _generate(
+            "S4", 12, 2, 8, 6, 5, draw_type="league_knockout", seed=1, league_meetings=1
         )
-        self.assertEqual(response.status_code, 422, response.text)
-        self.assertIn("requires exactly 3 court(s)", response.json()["detail"])
-        self.assertLess(elapsed, 1.0)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertLess(elapsed, TIME_BUDGET_S)
+        body = response.json()
+        _assert_complete(self, body, players)
+        self.assertEqual(len(body["rounds"]), 8)
+        # Every pair meets every other exactly once: 15 league pair-vs-pair
+        # courts + the 1 friendly = 16 pure pair courts in total.
+        self.assertEqual(_pure_pair_courts(body, pairs), 16)
+        for pair, count in body["fixed_pair_counts"].items():
+            self.assertTrue(5 <= count <= 6, f"{pair} played together {count}x")
+        friendly = sum(
+            1 for r in body["rounds"] for c in r["courts"] if c.get("friendly")
+        )
+        self.assertEqual(friendly, 1)
+        # No back-to-back rests on this config (AC-K4) and no blocking
+        # consecutive-rest violations (D10).
+        resting = {}
+        for r in body["rounds"]:
+            for p in r["resting"]:
+                resting.setdefault(p, set()).add(r["round"])
+        for rounds_in in resting.values():
+            run = 0
+            for round_num in range(1, 9):
+                run = run + 1 if round_num in rounds_in else 0
+                self.assertLessEqual(run, 1, "back-to-back rest on an avoidable config")
+        self.assertFalse([v for v in body["violations"] if ": rested " in v])
 
 
 class RoundRobinPairsFieldTests(_FieldScenarioTest):
