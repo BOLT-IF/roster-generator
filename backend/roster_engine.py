@@ -1,6 +1,8 @@
 """Badminton doubles roster generation engine (library, no CLI)."""
 
 import random
+from collections import Counter
+from itertools import combinations
 
 
 class RosterError(Exception):
@@ -15,58 +17,434 @@ def _team_label(team):
     return " & ".join(team)
 
 
-def _select_resting_players(players, num_resting, must_rest, cannot_rest,
-                            rest_counts, consec_play, fixed_pairs):
-    resting = set(must_rest)
+def _co_key(unit_a, unit_b):
+    """Order-independent dict key for a pair of rest units."""
+    a, b = sorted((tuple(sorted(unit_a)), tuple(sorted(unit_b))))
+    return (a, b)
 
-    still_needed = num_resting - len(resting)
-    if still_needed > 0:
-        candidates = [p for p in players if p not in resting and p not in cannot_rest]
-        candidates.sort(key=lambda p: (rest_counts[p], -consec_play[p]))
 
-        pair_map = {}
+def _rest_units(players, fixed_pairs, pairs_active):
+    """Rest units for the round: once pairs are active, a fixed pair is one
+    unit (both partners rest or neither); unpaired players are single units.
+    Before activation every player is an independent unit."""
+    if not pairs_active:
+        return [[p] for p in players]
+    units = []
+    paired = set()
+    for pair in fixed_pairs:
+        units.append(list(pair))
+        paired.update(pair)
+    units.extend([p] for p in players if p not in paired)
+    return units
+
+
+class _SearchBudgetExceeded(Exception):
+    """Internal: the rest-schedule search blew its application budget."""
+
+
+def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
+                        fixed_pairs, pair_start_round, max_consecutive_rest,
+                        rng, application_budget=40000, candidate_cap=300):
+    """Plan the whole session's rest schedule with backtracking search.
+
+    Tries the strictest fairness rules first and relaxes in tiers, following
+    the C-1 precedence (limits > max-consecutive-rest > rest-count spread >
+    co-rest variety / no back-to-back). Organizer limits (consecutive-game
+    limits) are honored in every tier; everything else drops one tier at a
+    time. Returns a list of frozensets (resting players per round), or None
+    when no tier succeeded within its budget — the caller then falls back
+    to the greedy per-round selection.
+    """
+    if num_resting <= 0:
+        return [frozenset()] * num_rounds
+
+    units_per_round = [
+        _rest_units(players, fixed_pairs, rnd + 1 >= pair_start_round)
+        for rnd in range(num_rounds)
+    ]
+    no_limit = num_rounds + 1
+    all_players = frozenset(players)
+
+    # --- arithmetic feasibility pre-checks (skip tiers that cannot work) ---
+    def mcr_feasible():
+        # A player resting at most m consecutive rounds must play at least
+        # one round in between, so the resting share is at most m/(m+1).
+        return num_resting * (max_consecutive_rest + 1) <= len(players) * max_consecutive_rest
+
+    def co_feasible():
+        # Fewest rest units a round can use (largest units first); every
+        # pair of co-resting units consumes one co-rest slot.
+        for units in units_per_round:
+            largest = max(len(u) for u in units) if units else 1
+            k_min = -(-num_resting // largest)
+            if units and k_min >= 2:
+                min_events = num_rounds * (k_min * (k_min - 1) // 2)
+                available = len(units) * (len(units) - 1) // 2
+                if min_events > available:
+                    return False
+        return True
+
+    tiers = []
+    # Relaxation ladder, strictest first. Organizer limits (must_rest) are
+    # honored in every tier; max-consecutive-rest is kept while arithmetically
+    # possible; rest-count spread outlasts co-rest variety, which outlasts the
+    # no-back-to-back rule (C-1 precedence §3). The "spread" co mode allows a
+    # unit pair to reach floor(events/pairs)+1 during the session but requires
+    # the final co-rest spread to be ≤ 1.
+    mcr_ok = mcr_feasible()
+
+    def tier(co_mode, b2b=True, spread=True):
+        flags = {"co": co_mode, "b2b": b2b, "spread": spread}
+        if mcr_ok:
+            flags["mcr"] = True
+        return flags
+
+    tiers = []
+    if co_feasible():
+        tiers.append(tier("cap1"))
+    tiers.append(tier("spread"))
+    tiers.append(tier(None))
+    tiers.append(tier(None, b2b=False))
+    if mcr_ok:
+        tiers.append({"mcr": True})
+
+    def resting_candidates(rnd, must_rest, cannot_rest, enforce_mcr, co, rest_counts):
+        """Resting sets for this round, exact size, best-first ordering."""
+        units = units_per_round[rnd]
+        order = list(units)
+        rng.shuffle(order)
+
+        # Enumerate on the smaller side (resting or playing) to bound the
+        # combinations; the other side is the complement of whole units.
+        if num_resting <= len(players) - num_resting:
+            target = num_resting
+            direct = True
+        else:
+            target = len(players) - num_resting
+            direct = False
+
+        subsets = []
+
+        def rec(index, chosen, size):
+            if size == target:
+                subsets.append(list(chosen))
+                return
+            if index >= len(order):
+                return
+            unit = order[index]
+            if size + len(unit) <= target:
+                rec(index + 1, chosen + [unit], size + len(unit))
+            rec(index + 1, chosen, size)
+
+        rec(0, [], 0)
+
+        scored = []
+        for subset in subsets:
+            members = frozenset(p for u in subset for p in u)
+            resting = members if direct else all_players - members
+            if not must_rest <= resting:
+                continue
+            blocked = cannot_rest & resting
+            if enforce_mcr and blocked:
+                continue
+            full = [frozenset(u) for u in units if set(u) <= resting]
+            co_max = max(
+                [co.get(_co_key(a, b), 0) for a, b in combinations(full, 2)]
+                or [0]
+            )
+            count_sum = sum(rest_counts[p] for p in resting)
+            scored.append(((len(blocked), count_sum, co_max, rng.random()), resting))
+        scored.sort(key=lambda item: item[0])
+        return [resting for _, resting in scored[:candidate_cap]]
+
+    def dfs(rnd, rest_counts, consec_play, consec_rest, co, co_done, prev_resting, flags, budget):
+        if rnd == num_rounds:
+            if flags.get("co") == "spread":
+                for phase_units, phase_co in co_done + ((units_per_round[rnd - 1], co),):
+                    n = len(phase_units)
+                    if n < 2:
+                        continue
+                    unit_sets = [frozenset(u) for u in phase_units]
+                    values = [
+                        phase_co.get(_co_key(unit_sets[i], unit_sets[j]), 0)
+                        for i in range(n)
+                        for j in range(i + 1, n)
+                    ]
+                    if max(values) - min(values) > 1:
+                        return None
+            return []
+        round_num = rnd + 1
+        must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
+        cannot_rest = {p for p in players if consec_rest[p] >= max_consecutive_rest} - must_rest
+
+        # Fixed pairs activating: co-rest history starts fresh for the new
+        # (merged) unit structure; the completed phase is kept for the final
+        # spread check.
+        if round_num == pair_start_round:
+            phase_co = {}
+            phase_done = co_done + ((units_per_round[rnd - 1] if rnd else units_per_round[0], co),)
+        else:
+            phase_co = co
+            phase_done = co_done
+
+        for resting in resting_candidates(rnd, must_rest, cannot_rest, flags.get("mcr"), phase_co, rest_counts):
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _SearchBudgetExceeded()
+            if flags.get("b2b") and prev_resting is not None and resting == prev_resting:
+                continue
+
+            new_counts = dict(rest_counts)
+            for p in resting:
+                new_counts[p] += 1
+            if flags.get("spread"):
+                values = new_counts.values()
+                if max(values) - min(values) > 1:
+                    continue
+
+            new_co = dict(phase_co)
+            units = units_per_round[rnd]
+            full = [frozenset(u) for u in units if set(u) <= resting]
+            ok = True
+            co_mode = flags.get("co")
+            for a, b in combinations(full, 2):
+                key = _co_key(a, b)
+                value = new_co.get(key, 0) + 1
+                if co_mode == "cap1" and value > 1:
+                    ok = False
+                    break
+                new_co[key] = value
+            if not ok:
+                continue
+            if co_mode == "spread":
+                unit_count = len(units)
+                pair_count = unit_count * (unit_count - 1) // 2
+                if pair_count and new_co:
+                    events = sum(new_co.values())
+                    allowed_max = events // pair_count + 1
+                    if max(new_co.values()) > allowed_max:
+                        continue
+
+            new_cp = dict(consec_play)
+            new_cr = dict(consec_rest)
+            for p in players:
+                if p in resting:
+                    new_cp[p] = 0
+                    new_cr[p] += 1
+                else:
+                    new_cp[p] += 1
+                    new_cr[p] = 0
+
+            tail = dfs(rnd + 1, new_counts, new_cp, new_cr, new_co, phase_done, resting, flags, budget)
+            if tail is not None:
+                return [resting] + tail
+        return None
+
+    for flags in tiers:
+        budget = [application_budget]
+        try:
+            plan = dfs(
+                0,
+                {p: 0 for p in players},
+                {p: 0 for p in players},
+                {p: 0 for p in players},
+                {},
+                (),
+                None,
+                flags,
+                budget,
+            )
+        except _SearchBudgetExceeded:
+            plan = None
+        if plan is not None:
+            return plan
+    return None
+
+
+def _select_resting_set(players, num_resting, must_rest, cannot_rest,
+                        rest_counts, consec_play, co_rest, last_resting,
+                        fixed_pairs, pairs_active, rng, attempts=300):
+    """Pick this round's resting set.
+
+    Precedence (C-1-REQUIREMENTS.md §3): organizer limits first (must_rest
+    honored, cannot_rest avoided), then whole pair units, then rest-count
+    balance, then co-rest variety, then no repeat of last round's rest set.
+    All ties are broken by the seeded RNG, so round-1 resters depend on the
+    seed rather than on input order (M-28).
+
+    Returns the set of resting players.
+    """
+    if num_resting <= 0:
+        return set()
+
+    pair_map = {}
+    if pairs_active:
         for a, b in fixed_pairs:
             pair_map[a] = b
             pair_map[b] = a
 
-        selected = []
-        used = set()
-        for c in candidates:
-            if len(selected) >= still_needed:
-                break
-            if c in used:
-                continue
-            selected.append(c)
-            used.add(c)
-            partner = pair_map.get(c)
-            if partner and partner in candidates and partner not in used and len(selected) < still_needed:
-                if partner not in cannot_rest and partner not in resting:
-                    selected.append(partner)
-                    used.add(partner)
+    units = _rest_units(players, fixed_pairs, pairs_active)
 
-        resting.update(selected[:still_needed])
-    elif still_needed < 0:
-        overflow = sorted(must_rest, key=lambda p: consec_play[p])
-        for p in overflow:
-            if still_needed >= 0:
-                break
-            resting.discard(p)
-            still_needed += 1
+    def full_resting_units(resting):
+        return [frozenset(u) for u in units if set(u) <= resting]
 
-    if len(resting) < num_resting:
-        # Safety net: never return fewer resters than the round requires.
-        # Surplus "playing" players would silently vanish in the court
-        # builder - neither on a court nor resting. Completeness beats the
-        # consecutive-rest preference; any resulting rest-streak violation
-        # surfaces through the normal violation reporting instead.
-        shortfall = num_resting - len(resting)
-        fallback = sorted(
-            (p for p in players if p not in resting),
-            key=lambda p: (rest_counts[p], -consec_play[p]),
+    def build_attempt():
+        resting = set(must_rest)
+        budget = num_resting - len(resting)
+
+        # Limits first: complete forced players to whole pair units while
+        # the budget allows (rest-as-unit outranks count balance).
+        if pairs_active:
+            for p in sorted(resting):
+                partner = pair_map.get(p)
+                if partner and partner not in resting and budget >= 1:
+                    resting.add(partner)
+                    budget -= 1
+
+        for allow_blocked in (False, True):
+            candidates = [
+                u for u in units
+                if not (set(u) & resting)
+                and (allow_blocked or not any(p in cannot_rest for p in u))
+            ]
+            while budget > 0 and candidates:
+                resting_full = full_resting_units(resting)
+
+                def pick_key(unit):
+                    co = max(
+                        [co_rest.get(_co_key(unit, rf), 0) for rf in resting_full]
+                        or [0]
+                    )
+                    return (sum(rest_counts[p] for p in unit), co, rng.random())
+
+                best_index = min(range(len(candidates)), key=lambda i: pick_key(candidates[i]))
+                unit = candidates.pop(best_index)
+                if len(unit) <= budget:
+                    resting.update(unit)
+                    budget -= len(unit)
+
+            if budget <= 0:
+                break
+
+        # Leftover budget that no whole unit fits: split the best unit.
+        # (Only reachable in mixed/odd configurations; the split is
+        # reported as a rest_unit_split warning afterwards.)
+        if budget > 0:
+            candidates = [u for u in units if not (set(u) & resting)]
+            if candidates:
+                best = min(
+                    candidates,
+                    key=lambda u: (
+                        any(p in cannot_rest for p in u),
+                        sum(rest_counts[p] for p in u),
+                        rng.random(),
+                    ),
+                )
+                members = list(best)
+                rng.shuffle(members)
+                resting.update(members[:budget])
+
+        # Overflow (more forced players than rest slots): drop the least
+        # urgent players — non-forced first, then lowest consecutive play.
+        while len(resting) > num_resting:
+            droppable = [p for p in resting if p not in must_rest]
+            if not droppable:
+                droppable = sorted(resting)
+            drop = min(droppable, key=lambda p: (consec_play[p], rng.random()))
+            resting.discard(drop)
+
+        # Safety net: the round requires exactly num_resting resters; a
+        # shortfall would silently drop players in the court builder
+        # (H-05). Completeness outranks every preference above.
+        while len(resting) < num_resting:
+            fillable = [p for p in players if p not in resting]
+            if not fillable:
+                break
+            resting.add(min(fillable, key=lambda p: (rest_counts[p], rng.random())))
+
+        return resting
+
+    def score(resting):
+        s = 0
+        s += 10000 * sum(1 for p in must_rest if p not in resting)
+        s += 1000 * sum(1 for p in resting if p in cannot_rest)
+        s += 100 * sum(rest_counts[p] for p in resting)
+        full = full_resting_units(resting)
+        cos = [co_rest.get(_co_key(a, b), 0) for a, b in combinations(full, 2)]
+        if cos:
+            s += 10 * max(cos) + sum(cos)
+        if last_resting is not None and frozenset(resting) == last_resting:
+            s += 500
+        return s
+
+    best_set, best_score = None, None
+    for _ in range(attempts):
+        candidate = build_attempt()
+        candidate_score = score(candidate)
+        if best_score is None or candidate_score < best_score:
+            best_set, best_score = candidate, candidate_score
+    return best_set
+
+
+def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
+    """Derive rest-fairness warnings purely from the generated roster.
+
+    Rules (C-1-REQUIREMENTS.md §5): rest_spread, rest_unit_split,
+    corest_spread. Strings are prefixed with the rule name so later layers
+    can structure them; the planner shows them as-is.
+    """
+    warnings = []
+
+    rest_counts = Counter()
+    for r in rounds:
+        for p in r["resting"]:
+            rest_counts[p] += 1
+    counts = [rest_counts.get(p, 0) for p in players]
+    if counts and max(counts) - min(counts) > 1:
+        high = [p for p in players if rest_counts.get(p, 0) == max(counts)]
+        low = [p for p in players if rest_counts.get(p, 0) == min(counts)]
+        warnings.append(
+            f"rest_spread: {', '.join(high)} rest {max(counts)}× "
+            f"while {', '.join(low)} rest {min(counts)}×"
         )
-        resting.update(fallback[:shortfall])
 
-    return resting
+    phases = {}
+    for r in rounds:
+        active = r["round"] >= pair_start_round
+        resting = set(r["resting"])
+        if active:
+            for pair in fixed_pairs:
+                overlap = resting & set(pair)
+                if overlap and len(overlap) < len(pair):
+                    warnings.append(
+                        f"rest_unit_split: {pair[0]} & {pair[1]} split in round {r['round']}"
+                    )
+        units = _rest_units(players, fixed_pairs, active)
+        phase = phases.setdefault(active, {"units": units, "co": Counter()})
+        full = [frozenset(u) for u in units if set(u) <= resting]
+        for a, b in combinations(full, 2):
+            phase["co"][_co_key(a, b)] += 1
+
+    for phase in phases.values():
+        unit_pairs = list(combinations(phase["units"], 2))
+        if not unit_pairs:
+            continue
+        values = [
+            phase["co"].get(_co_key(frozenset(a), frozenset(b)), 0)
+            for a, b in unit_pairs
+        ]
+        if max(values) - min(values) > 1:
+            hottest = [
+                f"{' & '.join(k[0])} + {' & '.join(k[1])}"
+                for k, v in phase["co"].items()
+                if v == max(values)
+            ][:3]
+            warnings.append(
+                f"corest_spread: {'; '.join(hottest)} rest together {max(values)}× "
+                f"while some units never rest together"
+            )
+
+    return warnings
 
 
 def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
@@ -249,18 +627,49 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
     fixed_pair_counts = {p: 0 for p in fixed_pairs}
     rounds = []
 
+    # C-1: plan the whole-session rest schedule first (tiered fairness
+    # rules via backtracking); fall back to the greedy per-round selection
+    # when planning fails. All randomness flows through the seeded rng, so
+    # the plan is reproducible per seed and varies across seeds.
+    rest_plan = _plan_rest_schedule(
+        players, num_rounds, num_resting, consecutive_limits,
+        fixed_pairs, pair_start_round, max_consecutive_rest, rng,
+    )
+
+    # Co-rest bookkeeping for the greedy fallback: how often each pair of
+    # rest units rested together. Reset when the unit structure changes
+    # (fixed pairs activating).
+    co_rest = {}
+    last_resting = None
+    pairs_active_previous = False
+
     for rnd in range(num_rounds):
         round_num = rnd + 1
         pairs_active = round_num >= pair_start_round
+        if pairs_active != pairs_active_previous:
+            co_rest = {}
+        pairs_active_previous = pairs_active
 
-        no_limit = num_rounds + 1
-        must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
-        cannot_rest = {p for p in players if consec_rest[p] >= max_consecutive_rest} - must_rest
+        if rest_plan is not None:
+            resting = set(rest_plan[rnd])
+        else:
+            no_limit = num_rounds + 1
+            must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
+            cannot_rest = {p for p in players if consec_rest[p] >= max_consecutive_rest} - must_rest
 
-        resting = _select_resting_players(
-            players, num_resting, must_rest, cannot_rest,
-            rest_counts, consec_play, fixed_pairs,
-        )
+            resting = _select_resting_set(
+                players, num_resting, must_rest, cannot_rest,
+                rest_counts, consec_play, co_rest, last_resting,
+                fixed_pairs, pairs_active, rng,
+            )
+        last_resting = frozenset(resting)
+
+        units = _rest_units(players, fixed_pairs, pairs_active)
+        fully_resting = [frozenset(u) for u in units if set(u) <= resting]
+        for unit_a, unit_b in combinations(fully_resting, 2):
+            key = _co_key(unit_a, unit_b)
+            co_rest[key] = co_rest.get(key, 0) + 1
+
         playing = [p for p in players if p not in resting]
 
         courts = _best_court_assignment(
@@ -307,6 +716,7 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
         rounds.append({"round": round_num, "courts": courts, "resting": sorted(resting)})
 
+    warnings.extend(_fairness_warnings(rounds, players, fixed_pairs, pair_start_round))
     return rounds, rest_counts, fixed_pair_counts, warnings
 
 
