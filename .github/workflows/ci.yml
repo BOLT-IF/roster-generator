@@ -34,6 +34,16 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    # CI speed (see CI-SPEED-SURVEY.md): the suite must stay serialized
+    # (workers: 1 - tests share one backend + SQLite DB), so parallelism
+    # comes from sharding across runners. Each shard is a full runner with
+    # its own backend, DB and browsers: identical isolation, unchanged
+    # coverage, ~4x the wall-clock speed. The union of shards is exactly
+    # the whole suite.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +62,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium webkit
 
@@ -62,5 +78,5 @@ jobs:
           venv/bin/pip install --upgrade pip
           venv/bin/pip install -r requirements.txt
 
-      - name: Run Playwright suite
-        run: npx playwright test
+      - name: Run Playwright suite (shard ${{ matrix.shard }}/4)
+        run: npx playwright test --shard=${{ matrix.shard }}/4
