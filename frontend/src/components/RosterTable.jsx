@@ -14,6 +14,47 @@ function CollapsibleSummary({ title, hint }) {
   );
 }
 
+const FAIRNESS_RULE_LABELS = {
+  rest_spread: "Rest balance",
+  corest_spread: "Rest group variety",
+  rest_unit_split: "Pair splits",
+  matchup_spread: "Matchup balance",
+  partner_repeat: "Partnerships",
+};
+
+function FairnessReportPanel({ fairness }) {
+  const issues = fairness?.issues || [];
+  if (issues.length === 0) return null;
+
+  return (
+    <div data-testid="fairness-report" className="rounded-lg border border-sky-200 bg-sky-50 p-4">
+      <p className="mb-1 text-sm font-medium text-sky-900">
+        Schedule fairness
+        <span className="ml-2 text-xs font-normal text-sky-700">
+          how even this schedule is - review before starting
+        </span>
+      </p>
+      {issues.map((issue, index) => (
+        <div key={`${issue.rule}-${index}`} className="mt-2 border-t border-sky-100 pt-2 first:border-t-0 first:pt-0">
+          <p className="text-sm text-sky-900">
+            <span className="font-semibold">{FAIRNESS_RULE_LABELS[issue.rule] || issue.rule}</span>
+            {" — "}
+            {issue.summary}
+            {issue.unavoidable ? (
+              <span className="ml-2 inline-flex items-center rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                Unavoidable
+              </span>
+            ) : null}
+          </p>
+          {issue.affected?.length ? (
+            <p className="mt-0.5 text-xs text-sky-700">Affected: {issue.affected.join("; ")}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function RosterTable({
   data,
   fixedPairs,
@@ -33,7 +74,7 @@ export default function RosterTable({
 }) {
   if (!data) return null;
 
-  const { rounds, court_numbers, rest_counts, fixed_pair_counts, violations, warnings } = data;
+  const { rounds, court_numbers, rest_counts, fixed_pair_counts, violations, warnings, fairness } = data;
   const fixedPairSet = new Set(fixedPairs.map(([a, b]) => [a, b].sort().join("|")));
 
   function isFixedPairTeam(team) {
@@ -151,12 +192,22 @@ export default function RosterTable({
 
   const maxResting = Math.max(...rounds.map((round) => round.resting.length), 0);
 
+  // Fairness issues are shown in their own panel; the plain-warnings box
+  // must not repeat them (the backend mirrors every issue as a warning
+  // string for older clients).
+  const fairnessRules = new Set((fairness?.issues || []).map((issue) => issue.rule));
+  const nonFairnessWarnings = warnings.filter(
+    (warning) => !fairnessRules.has(String(warning.split(":")[0]))
+  );
+
   return (
     <div className="space-y-6">
-      {warnings.length > 0 && (
+      <FairnessReportPanel fairness={fairness} />
+
+      {nonFairnessWarnings.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
           <p className="mb-1 text-sm font-medium text-amber-800">Warnings</p>
-          {warnings.map((warning, index) => (
+          {nonFairnessWarnings.map((warning, index) => (
             <p key={index} className="text-sm text-amber-700">{warning}</p>
           ))}
         </div>
