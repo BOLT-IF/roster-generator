@@ -43,8 +43,8 @@ class _SearchBudgetExceeded(Exception):
 
 
 def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_limits,
-                   fixed_pairs, pair_start_round, max_consecutive_rest,
-                   rng, application_budget=40000, candidate_cap=300):
+                   fixed_pairs, pair_start_round, max_consecutive_rest, rng,
+                   pair_target=3, application_budget=40000, candidate_cap=300):
     """Plan the whole session's rest schedule and (for pure fixed-pair
     rounds) the court pairings, with backtracking search.
 
@@ -170,14 +170,20 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
         scored.sort(key=lambda item: item[0])
         return [resting for _, resting in scored[:candidate_cap]]
 
-    def court_arrangements(resting):
+    def court_arrangements(resting, pair_counts):
         """All ways to split the playing fixed pairs into courts, or None
-        when the round is not a pure fixed-pair round (singles or split
-        pairs playing). Each arrangement is a tuple of (pair, pair)."""
+        when the round is not a pure fixed-pair round: singles or split
+        pairs playing, or a playing pair already at its pair_games target
+        (it must split, so the greedy assigner handles the round). Each
+        arrangement is a tuple of (pair, pair)."""
         playing = all_players - resting
         playing_pairs = [p for p in fixed_pairs if p[0] in playing and p[1] in playing]
         needed = 2 * num_courts
-        if len(playing_pairs) != needed or len(playing) != 2 * needed:
+        if (
+            len(playing) != 2 * needed
+            or len(playing_pairs) != needed
+            or any(pair_counts.get(p, 0) >= pair_target for p in playing_pairs)
+        ):
             return None
         partitions = []
 
@@ -193,7 +199,7 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
         return partitions
 
     def dfs(rnd, rest_counts, consec_play, consec_rest, co, co_done,
-            matchup, prev_resting, flags, budget):
+            matchup, pair_counts, prev_resting, flags, budget):
         if rnd == num_rounds:
             if flags.get("co") == "spread":
                 for phase_units, phase_co in co_done + ((units_per_round[rnd - 1], co),):
@@ -281,7 +287,7 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
             # Court pairings: only pure fixed-pair rounds in active phases
             # can be planned; everything else falls to the greedy assigner.
             if flags.get("matchup") and round_num >= pair_start_round:
-                arrangements = court_arrangements(resting)
+                arrangements = court_arrangements(resting, pair_counts)
             else:
                 arrangements = None
             if arrangements is None:
@@ -304,11 +310,14 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
                 if budget[0] < 0:
                     raise _SearchBudgetExceeded()
                 new_matchup = dict(matchup)
+                new_pair_counts = dict(pair_counts)
                 ok = True
                 if arrangement:
                     for a, b in arrangement:
                         key = _co_key(a, b)
                         new_matchup[key] = new_matchup.get(key, 0) + 1
+                        new_pair_counts[a] = new_pair_counts.get(a, 0) + 1
+                        new_pair_counts[b] = new_pair_counts.get(b, 0) + 1
                     if pair_pool and new_matchup:
                         total = sum(new_matchup.values())
                         allowed_max = total // pair_pool + 1
@@ -319,7 +328,7 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
 
                 tail = dfs(
                     rnd + 1, new_counts, new_cp, new_cr, new_co, phase_done,
-                    new_matchup, resting, flags, budget,
+                    new_matchup, new_pair_counts, resting, flags, budget,
                 )
                 if tail is not None:
                     return [(resting, arrangement)] + tail
@@ -336,6 +345,7 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
                 {},
                 (),
                 {},
+                {p: 0 for p in fixed_pairs},
                 None,
                 flags,
                 budget,
@@ -910,6 +920,7 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
     schedule = _plan_schedule(
         players, num_rounds, num_courts, num_resting, consecutive_limits,
         fixed_pairs, pair_start_round, max_consecutive_rest, rng,
+        pair_target=pair_target,
     )
 
     # Co-rest bookkeeping for the greedy fallback: how often each pair of
