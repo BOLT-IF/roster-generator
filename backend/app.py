@@ -144,7 +144,16 @@ class RosterRequest(BaseModel):
     players: list[str]
     fixed_pairs: list[list[str]] = []
     draw_type: str = "round_robin"
+    league_meetings: int = 1
     num_courts: int
+
+    @field_validator("league_meetings")
+    @classmethod
+    def league_meetings_supported(cls, v):
+        # The UI offers Play Once / Play Twice (C-2 D6).
+        if v not in (1, 2):
+            raise ValueError("league_meetings must be 1 (play once) or 2 (play twice)")
+        return v
     court_numbers: list[str] | None = None
     rounds: int = 9
     limits: dict[str, int] = {}
@@ -225,6 +234,7 @@ class RosterRequest(BaseModel):
 class CourtResult(BaseModel):
     team_a: list[str]
     team_b: list[str]
+    friendly: bool = False
 
 
 class RoundResult(BaseModel):
@@ -2115,12 +2125,15 @@ def api_generate(req: RosterRequest):
 
         try:
             if _has_fixed_pair_knockout_schedule(req.draw_type, fixed_pairs):
-                rounds, rest_counts, fpc, warnings = generate_fixed_pair_knockout_roster(
+                rounds, rest_counts, fpc, warnings, notes = generate_fixed_pair_knockout_roster(
                     players=req.players,
                     fixed_pairs=fixed_pairs,
                     num_courts=req.num_courts,
                     num_rounds=req.rounds,
                     pair_target=req.pair_games,
+                    league_meetings=req.league_meetings,
+                    seed=req.seed,
+                    max_consecutive_rest=req.max_consecutive_rest,
                 )
             else:
                 rounds, rest_counts, fpc, warnings = generate_roster(
@@ -2147,12 +2160,21 @@ def api_generate(req: RosterRequest):
             req.pair_start_round,
             req.draw_type,
         )
+        if _has_fixed_pair_knockout_schedule(req.draw_type, fixed_pairs):
+            # C-2 D10: league coverage beats no-back-to-back-rest, so forced
+            # consecutive rests are a fairness report, never a blocking
+            # violation (they ride in warnings + fairness issues instead).
+            violations = [v for v in violations if ": rested " not in v]
 
         round_results = []
         for r in rounds:
+            friendly_courts = set(r.get("friendly_courts") or [])
             courts = [
-                CourtResult(team_a=list(ta), team_b=list(tb))
-                for ta, tb in r["courts"]
+                CourtResult(
+                    team_a=list(ta), team_b=list(tb),
+                    friendly=index in friendly_courts,
+                )
+                for index, (ta, tb) in enumerate(r["courts"])
             ]
             round_results.append(RoundResult(
                 round=r["round"], courts=courts, resting=r["resting"],
@@ -2170,6 +2192,11 @@ def api_generate(req: RosterRequest):
             fairness=FairnessReport(**fairness_report(
                 rounds, req.players, fixed_pairs, req.pair_start_round,
                 None if req.draw_type == "league_knockout" else req.pair_games,
+                max_consecutive_rest=req.max_consecutive_rest,
+                consecutive_rest_forced=(
+                    notes.get("consecutive_rest_forced")
+                    if req.draw_type == "league_knockout" else None
+                ),
             )),
         )
 
