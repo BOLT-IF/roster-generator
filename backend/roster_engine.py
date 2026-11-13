@@ -1295,21 +1295,21 @@ def _plan_league_schedule(pairs, num_courts, meetings, max_consecutive_rest, rng
         return None
 
     deadline = time.monotonic() + deadline_seconds
-    quality_tier_count = 4
     tier_index = 0
     for flags in tiers:
         tier_index += 1
-        remaining_tiers = len(tiers) - tier_index + 1
-        # The four quality tiers get a real budget share each; the capped
-        # minimization attempts get small slices (they mostly fail fast on
-        # the genuinely-forced shapes). The last plain-coverage tier keeps a
-        # reserve so the ladder can never fail purely on time (AC-P1).
-        if tier_index <= quality_tier_count:
-            slice_budget = application_budget // quality_tier_count
+        is_final = tier_index == len(tiers)
+        # Tier exits are driven by APPLICATION BUDGETS, not time slices:
+        # the same seed must produce the same schedule on a fast laptop
+        # and a slow CI runner. The single global deadline is only an
+        # emergency backstop (AC-P1); the last tier keeps a small reserve
+        # so coverage always completes.
+        if tier_index <= 4:
+            slice_budget = application_budget // 8
         else:
             slice_budget = max(application_budget // 24, 3000)
-        slice_deadline = deadline - (deadline_seconds * 0.35 / remaining_tiers)
-        budget = [slice_budget, slice_deadline]
+        tier_deadline = deadline if is_final else deadline - 0.75
+        budget = [slice_budget, tier_deadline]
         try:
             plan = dfs(
                 dict(remaining),
