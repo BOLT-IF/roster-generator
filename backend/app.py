@@ -1097,6 +1097,10 @@ def _build_pair_standings(rounds: list[dict], scores_by_round: list[list[dict]])
     standings = {}
     for round_index, round_data in enumerate(rounds):
         for court_index, court in enumerate(round_data.get("courts", [])):
+            # C-2 AC-F4: friendlies never count toward league standings or
+            # knockout seeding.
+            if court.get("friendly"):
+                continue
             score = scores_by_round[round_index][court_index] if round_index < len(scores_by_round) else None
             if not _is_score_complete(score):
                 continue
@@ -1210,6 +1214,10 @@ def _iter_completed_matches(payload: dict, db, session_id: str):
         if round_index >= len(ended_league_rounds) or not ended_league_rounds[round_index]:
             continue
         for court_index, court in enumerate(round_data.get("courts", [])):
+            # C-2 AC-F4: friendlies are for fun - they never count toward
+            # player stats.
+            if court.get("friendly"):
+                continue
             score = league_scores[round_index][court_index] if round_index < len(league_scores) else None
             if _is_score_complete(score):
                 yield {
@@ -2001,12 +2009,16 @@ def _build_roster_response_from_rounds(
 
     round_results = []
     for round_data in rounds:
+        friendly_courts = set(round_data.get("friendly_courts") or [])
         round_results.append(
             RoundResult(
                 round=round_data["round"],
                 courts=[
-                    CourtResult(team_a=list(team_a), team_b=list(team_b))
-                    for team_a, team_b in round_data.get("courts", [])
+                    CourtResult(
+                        team_a=list(team_a), team_b=list(team_b),
+                        friendly=index in friendly_courts,
+                    )
+                    for index, (team_a, team_b) in enumerate(round_data.get("courts", []))
                 ],
                 resting=list(round_data.get("resting", [])),
             )
@@ -2044,8 +2056,19 @@ def _normalize_existing_roster(req: RosterRequest, roster: RosterResponse) -> Ro
         )
 
     expected_rounds = req.rounds
+    if _has_fixed_pair_knockout_schedule(req.draw_type, fixed_pairs):
+        # C-2 D3/AC-R3: league rounds are derived (ceil(matches/courts));
+        # the request's rounds value may be stale and is not authoritative.
+        pair_count = len(fixed_pairs)
+        league_matches = pair_count * (pair_count - 1) // 2 * max(req.league_meetings, 1)
+        expected_rounds = -(-league_matches // req.num_courts)
     if len(roster.rounds) != expected_rounds:
-        raise HTTPException(status_code=422, detail="Edited roster must contain the configured number of rounds")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Edited roster must contain the configured number of rounds"
+            if not _has_fixed_pair_knockout_schedule(req.draw_type, fixed_pairs)
+            else f"League + knockout rosters must contain {expected_rounds} derived round(s), but {len(roster.rounds)} provided",
+        )
 
     warnings: list[str] = []
     if num_resting == 0 and req.limits:
@@ -2064,13 +2087,16 @@ def _normalize_existing_roster(req: RosterRequest, roster: RosterResponse) -> Ro
 
         seen_players: list[str] = []
         normalized_courts: list[tuple[tuple[str, str], tuple[str, str]]] = []
-        for court_result in round_result.courts:
+        friendly_courts: list[int] = []
+        for court_index, court_result in enumerate(round_result.courts):
             if len(court_result.team_a) != 2 or len(court_result.team_b) != 2:
                 raise HTTPException(status_code=422, detail=f"Round {round_result.round} courts must contain exactly 2 players per team")
             for player in court_result.team_a + court_result.team_b:
                 if player not in players_set:
                     raise HTTPException(status_code=422, detail=f"Round {round_result.round} contains unknown player '{player}'")
                 seen_players.append(player)
+            if court_result.friendly:
+                friendly_courts.append(court_index)
             normalized_courts.append(
                 (
                     tuple(sorted(court_result.team_a)),
@@ -2093,6 +2119,7 @@ def _normalize_existing_roster(req: RosterRequest, roster: RosterResponse) -> Ro
                 "round": round_result.round,
                 "courts": normalized_courts,
                 "resting": sorted(round_result.resting),
+                "friendly_courts": friendly_courts,
             }
         )
 
