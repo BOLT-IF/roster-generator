@@ -380,6 +380,61 @@ class PairDissolutionTests(unittest.TestCase):
                 self.assertLessEqual(max(vals) - min(vals), 1)
 
 
+class NoBackToBackRestPriorityTests(unittest.TestCase):
+    """C-1 v3 §3 rule 2: no player rests consecutive rounds - highest
+    scheduling priority. Zero violations whenever any schedule can avoid
+    them (never traded for rest spread, co-rest, or matchup fairness), and
+    the arithmetic minimum when unavoidable."""
+
+    @staticmethod
+    def _b2b_violations(rounds, max_consecutive_rest):
+        violations = validate_roster(rounds, {}, max_consecutive_rest, [], {}, 1, 1)
+        return sum(1 for v in violations if "rested" in v and "consecutive" in v)
+
+    def test_zero_back_to_back_when_avoidable(self):
+        # The fairness optimizer (spread, co-rest, matchups) runs fully on
+        # these configs - none of it may ever cost a back-to-back rest.
+        configs = [
+            (12, 2, 13, "all"),   # Organiser shape
+            (13, 3, 10, "none"),
+            (18, 4, 10, "none"),
+            (10, 2, 12, "none"),
+            (16, 4, 10, "all"),
+        ]
+        for players_n, courts, rounds_n, mode in configs:
+            if players_n - courts * 4 <= 0:
+                continue
+            with self.subTest(config=f"{players_n}p/{courts}c/{rounds_n}r/{mode}"):
+                for seed in (1, 2, 3):
+                    players = [f"N{seed}-{i}" for i in range(1, players_n + 1)]
+                    pairs = (
+                        [(players[i], players[i + 1]) for i in range(0, players_n - 1, 2)]
+                        if mode == "all" else []
+                    )
+                    rounds, _, _, _ = generate_roster(
+                        players, courts, rounds_n, {}, pairs,
+                        pair_target=13, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                    )
+                    self.assertEqual(
+                        self._b2b_violations(rounds, 1), 0,
+                        "a player rested back-to-back although an avoiding schedule exists",
+                    )
+
+    def test_unavoidable_case_hits_arithmetic_floor(self):
+        # 9 players, 1 court: 5 must rest but only 4 play, so at least
+        # (5 - 4) = 1 rester repeats every round after the first. Over 6
+        # rounds the minimum is exactly 5 back-to-back events - the engine
+        # must hit that floor, not merely stay near it.
+        players = [f"F{i}" for i in range(1, 10)]
+        for seed in (1, 2, 3):
+            with self.subTest(seed=seed):
+                rounds, _, _, _ = generate_roster(
+                    players, 1, 6, {}, [],
+                    pair_target=1, max_consecutive_rest=1, pair_start_round=1, seed=seed,
+                )
+                self.assertEqual(self._b2b_violations(rounds, 1), 5)
+
+
 class MatchupFairnessTests(unittest.TestCase):
     """AC-M1..M4: pair-vs-pair matchup balance (fixed pairs) and partner/
     opponent balance (rotating)."""
