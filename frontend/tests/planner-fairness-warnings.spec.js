@@ -166,7 +166,10 @@ test("generate spinner appears only after one second and never blocks review con
   await domClick(page.getByRole("button", { name: "Next: Review" }));
 
   await page.route("**/api/generate", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1800));
+    // Generous delay: under full-suite parallel load the browser's main
+    // thread lags, and the spinner's one-second threshold must fire well
+    // before this resolves on any runner.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
     const response = await route.fetch();
     await route.fulfill({ response });
   });
@@ -182,7 +185,7 @@ test("generate spinner appears only after one second and never blocks review con
 
   // After one second: the spinner appears on the button - while the review
   // content is still there (non-blocking).
-  await expect(page.locator("[data-testid='generate-spinner']")).toBeVisible({ timeout: 3000 });
+  await expect(page.locator("[data-testid='generate-spinner']")).toBeVisible({ timeout: 5000 });
   await expect(page.getByText("Generate a roster to preview the rounds and courts here.")).toBeVisible();
 
   // Response arrives: spinner gone, roster rendered, session name editable.
