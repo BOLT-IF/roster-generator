@@ -1,5 +1,28 @@
 import { expect, test } from "@playwright/test";
-import { addPlannerPlayers, pairPlayers, getFirstCourtPlayerButtons } from "./helpers/planner";
+import { addPlannerPlayers, getFirstCourtPlayerButtons } from "./helpers/planner";
+
+// Pairing six pairs in a row re-renders the selected-players list after
+// every pairing; on narrow viewports the later cards can stay unsettled
+// long enough for a plain click to time out in slow CI. Scroll first and
+// retry while the list settles.
+async function pairPlayersReliably(page, first, second) {
+  for (const player of [first, second]) {
+    const target = page.getByText(player.fullName, { exact: true });
+    let clicked = false;
+    for (let attempt = 0; attempt < 4 && !clicked; attempt += 1) {
+      try {
+        await target.scrollIntoViewIfNeeded({ timeout: 5000 });
+        await target.click({ timeout: 5000 });
+        clicked = true;
+      } catch {
+        await page.waitForTimeout(600);
+      }
+    }
+    if (!clicked) {
+      throw new Error(`could not click ${player.fullName} in the pairing list`);
+    }
+  }
+}
 
 // C-1 PR3 (AC-W2..W4, PERF-2): the planner surfaces the structured fairness
 // report - one line per slipped rule, naming who is affected, marking
@@ -21,7 +44,7 @@ async function setNumeric(page, label, value) {
 async function generateOrganiserRoster(page, request, testInfo) {
   const players = await addPlannerPlayers(page, request, testInfo.project.name, 12, "FRW");
   for (let i = 0; i < 12; i += 2) {
-    await pairPlayers(page, players[i], players[i + 1]);
+    await pairPlayersReliably(page, players[i], players[i + 1]);
   }
   await page.getByRole("button", { name: "Next: Settings" }).click();
   await page.getByRole("button", { name: "Increase Courts" }).click();
