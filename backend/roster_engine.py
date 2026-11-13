@@ -1295,21 +1295,27 @@ def _plan_league_schedule(pairs, num_courts, meetings, max_consecutive_rest, rng
         return None
 
     deadline = time.monotonic() + deadline_seconds
-    quality_tier_count = 4
     tier_index = 0
     for flags in tiers:
         tier_index += 1
-        remaining_tiers = len(tiers) - tier_index + 1
-        # The four quality tiers get a real budget share each; the capped
-        # minimization attempts get small slices (they mostly fail fast on
-        # the genuinely-forced shapes). The last plain-coverage tier keeps a
-        # reserve so the ladder can never fail purely on time (AC-P1).
-        if tier_index <= quality_tier_count:
-            slice_budget = application_budget // quality_tier_count
+        is_final = tier_index == len(tiers)
+        # Tier exits are driven by APPLICATION BUDGETS, not time slices:
+        # the same seed must produce the same schedule on a fast laptop
+        # and a slow CI runner. Budgets are deliberately small: configs a
+        # quality tier can satisfy at all (6p/2c, 8p/3c, ...) satisfy it
+        # within a few thousand applications, while genuinely-forced
+        # configs fail fast instead of burning the slow runner's clock -
+        # the earlier large budgets starved later tiers on slow machines
+        # (measured: CI failed 8p/3c that passes in 52ms locally). The
+        # single global deadline stays as the emergency backstop (AC-P1).
+        if tier_index <= 4:
+            slice_budget = max(application_budget // 60, 6000)
+        elif is_final:
+            slice_budget = max(application_budget // 60, 6000)
         else:
-            slice_budget = max(application_budget // 24, 3000)
-        slice_deadline = deadline - (deadline_seconds * 0.35 / remaining_tiers)
-        budget = [slice_budget, slice_deadline]
+            slice_budget = max(application_budget // 160, 1500)
+        tier_deadline = deadline if is_final else deadline - 0.75
+        budget = [slice_budget, tier_deadline]
         try:
             plan = dfs(
                 dict(remaining),
