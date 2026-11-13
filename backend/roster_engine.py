@@ -23,19 +23,32 @@ def _co_key(unit_a, unit_b):
     return (a, b)
 
 
-def _rest_units(players, fixed_pairs, pairs_active):
-    """Rest units for the round: once pairs are active, a fixed pair is one
-    unit (both partners rest or neither); unpaired players are single units.
-    Before activation every player is an independent unit."""
+def _rest_units(players, fixed_pairs, pairs_active, pair_counts=None, pair_target=None):
+    """Rest units for the round.
+
+    Once fixed pairs are active, a pair is ONE unit only while it is still
+    under its together-target (pair_games). When the pair completes its
+    target games it dissolves: the two players go back to being independent
+    for courts AND rests (C-1 requirements v2 - "open to be random" after
+    the target; accidental re-pairing on a court is allowed). Before
+    activation every player is an independent unit.
+    """
     if not pairs_active:
         return [[p] for p in players]
+    counts = pair_counts or {}
     units = []
     paired = set()
     for pair in fixed_pairs:
-        units.append(list(pair))
-        paired.update(pair)
+        if pair_target is None or counts.get(pair, 0) < pair_target:
+            units.append(list(pair))
+            paired.update(pair)
     units.extend([p] for p in players if p not in paired)
     return units
+
+
+def _units_signature(units):
+    """Hashable signature of a unit structure, for phase-break detection."""
+    return frozenset(frozenset(u) for u in units)
 
 
 class _SearchBudgetExceeded(Exception):
@@ -58,10 +71,17 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
     or None when no tier succeeded within its budget, in which case the
     caller falls back entirely to the greedy per-round selection.
     """
-    units_per_round = [
-        _rest_units(players, fixed_pairs, rnd + 1 >= pair_start_round)
-        for rnd in range(num_rounds)
-    ]
+    def units_for_round(rnd, pair_counts):
+        # Units depend on the pair-together counts at that round: a pair
+        # that has completed its pair_games target is dissolved into two
+        # singles. The planner only counts pairings from rounds it planned
+        # itself, so counts can lag the greedy assigner's by a round - an
+        # acceptable approximation that errs on keeping pairs fused longer.
+        return _rest_units(
+            players, fixed_pairs, rnd + 1 >= pair_start_round,
+            pair_counts=pair_counts, pair_target=pair_target,
+        )
+
     no_limit = num_rounds + 1
     all_players = frozenset(players)
     n_pairs = len(fixed_pairs)
@@ -79,8 +99,10 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
         if num_resting <= 0:
             return True
         # Fewest rest units a round can use (largest units first); every
-        # pair of co-resting units consumes one co-rest slot.
-        for units in units_per_round:
+        # pair of co-resting units consumes one co-rest slot. Checked with
+        # the initial (all pairs fused) structure - the loosest case.
+        for rnd in range(num_rounds):
+            units = units_for_round(rnd, {})
             largest = max(len(u) for u in units) if units else 1
             k_min = -(-num_resting // largest)
             if units and k_min >= 2:
@@ -121,9 +143,8 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
     if mcr_ok:
         tiers.append({"mcr": True})
 
-    def resting_candidates(rnd, must_rest, cannot_rest, enforce_mcr, co, rest_counts):
+    def resting_candidates(rnd, units, must_rest, cannot_rest, enforce_mcr, co, rest_counts):
         """Resting sets for this round, exact size, best-first ordering."""
-        units = units_per_round[rnd]
         order = list(units)
         rng.shuffle(order)
 
@@ -199,10 +220,10 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
         return partitions
 
     def dfs(rnd, rest_counts, consec_play, consec_rest, co, co_done,
-            matchup, pair_counts, prev_resting, flags, budget):
+            matchup, pair_counts, prev_resting, prev_units, flags, budget):
         if rnd == num_rounds:
             if flags.get("co") == "spread":
-                for phase_units, phase_co in co_done + ((units_per_round[rnd - 1], co),):
+                for phase_units, phase_co in co_done + ((prev_units, co),):
                     n = len(phase_units)
                     if n < 2:
                         continue
@@ -226,17 +247,20 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
         must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
         cannot_rest = {p for p in players if consec_rest[p] >= max_consecutive_rest} - must_rest
 
-        # Fixed pairs activating: co-rest history starts fresh for the new
-        # (merged) unit structure; the completed phase is kept for the final
-        # spread check.
-        if round_num == pair_start_round:
+        # Units for this round (pairs fuse on activation and dissolve when
+        # they complete their together-target). A change in the unit
+        # structure starts a fresh co-rest phase: co-rest between merged
+        # pair units or dissolved singles is only comparable within one
+        # structure. The completed phase is kept for the final check.
+        units = units_for_round(rnd, pair_counts)
+        if prev_units is not None and _units_signature(units) != _units_signature(prev_units):
             phase_co = {}
-            phase_done = co_done + ((units_per_round[rnd - 1] if rnd else units_per_round[0], co),)
+            phase_done = co_done + ((prev_units, co),)
         else:
             phase_co = co
             phase_done = co_done
 
-        for resting in resting_candidates(rnd, must_rest, cannot_rest, flags.get("mcr"), phase_co, rest_counts):
+        for resting in resting_candidates(rnd, units, must_rest, cannot_rest, flags.get("mcr"), phase_co, rest_counts):
             budget[0] -= 1
             if budget[0] < 0:
                 raise _SearchBudgetExceeded()
@@ -252,7 +276,6 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
                     continue
 
             new_co = dict(phase_co)
-            units = units_per_round[rnd]
             full = [frozenset(u) for u in units if set(u) <= resting]
             ok = True
             co_mode = flags.get("co")
@@ -323,12 +346,23 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
                         allowed_max = total // pair_pool + 1
                         if max(new_matchup.values()) > allowed_max:
                             ok = False
+                elif round_num >= pair_start_round:
+                    # Courts go to the greedy assigner this round: it forces
+                    # every under-target pair with both members playing onto
+                    # one team, so approximate the together-increment now -
+                    # this keeps dissolution timing (and therefore the unit
+                    # structure of later rounds) aligned with reality.
+                    playing = all_players - resting
+                    for pair in fixed_pairs:
+                        if (pair[0] in playing and pair[1] in playing
+                                and new_pair_counts.get(pair, 0) < pair_target):
+                            new_pair_counts[pair] = new_pair_counts.get(pair, 0) + 1
                 if not ok:
                     continue
 
                 tail = dfs(
                     rnd + 1, new_counts, new_cp, new_cr, new_co, phase_done,
-                    new_matchup, new_pair_counts, resting, flags, budget,
+                    new_matchup, new_pair_counts, resting, units, flags, budget,
                 )
                 if tail is not None:
                     return [(resting, arrangement)] + tail
@@ -347,6 +381,7 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
                 {},
                 {p: 0 for p in fixed_pairs},
                 None,
+                None,
                 flags,
                 budget,
             )
@@ -359,27 +394,23 @@ def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_lim
 
 def _select_resting_set(players, num_resting, must_rest, cannot_rest,
                         rest_counts, consec_play, co_rest, last_resting,
-                        fixed_pairs, pairs_active, rng, attempts=300):
+                        units, pair_map, rng, attempts=300):
     """Pick this round's resting set.
 
     Precedence (C-1-REQUIREMENTS.md §3): organizer limits first (must_rest
     honored, cannot_rest avoided), then whole pair units, then rest-count
     balance, then co-rest variety, then no repeat of last round's rest set.
     All ties are broken by the seeded RNG, so round-1 resters depend on the
-    seed rather than on input order (M-28).
+    seed rather than on input order (M-28). `units` and `pair_map` reflect
+    the target-aware unit structure (pairs dissolved after completing
+    pair_games are independent).
 
     Returns the set of resting players.
     """
     if num_resting <= 0:
         return set()
 
-    pair_map = {}
-    if pairs_active:
-        for a, b in fixed_pairs:
-            pair_map[a] = b
-            pair_map[b] = a
-
-    units = _rest_units(players, fixed_pairs, pairs_active)
+    pair_map = pair_map or {}
 
     def full_resting_units(resting):
         return [frozenset(u) for u in units if set(u) <= resting]
@@ -390,12 +421,11 @@ def _select_resting_set(players, num_resting, must_rest, cannot_rest,
 
         # Limits first: complete forced players to whole pair units while
         # the budget allows (rest-as-unit outranks count balance).
-        if pairs_active:
-            for p in sorted(resting):
-                partner = pair_map.get(p)
-                if partner and partner not in resting and budget >= 1:
-                    resting.add(partner)
-                    budget -= 1
+        for p in sorted(resting):
+            partner = pair_map.get(p)
+            if partner and partner not in resting and budget >= 1:
+                resting.add(partner)
+                budget -= 1
 
         for allow_blocked in (False, True):
             candidates = [
@@ -482,13 +512,17 @@ def _select_resting_set(players, num_resting, must_rest, cannot_rest,
     return best_set
 
 
-def _fairness_issues(rounds, players, fixed_pairs, pair_start_round):
+def _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target=None):
     """Derive structured C-1 fairness issues purely from the roster.
 
     Rules (C-1-REQUIREMENTS.md §5): rest_spread, rest_unit_split,
     corest_spread, matchup_spread (with an unavoidable flag when the
     unevenness is arithmetically forced), and partner_repeat for rotating
     mode. Each issue is {rule, summary, affected, unavoidable}.
+
+    pair_target enables the v2 unit semantics: a pair that has completed
+    its together-target is dissolved, so its members resting separately is
+    normal (not a split) and co-rest phases break at dissolution.
     """
     issues = []
 
@@ -508,12 +542,30 @@ def _fairness_issues(rounds, players, fixed_pairs, pair_start_round):
             "unavoidable": False,
         })
 
-    phases = {}
+    # Reconstruct the unit structure round by round: together-counts grow
+    # from the courts, and a pair dissolves once its count reaches the
+    # target (same order the engine used when it picked the units).
+    together_counts = {pair: 0 for pair in fixed_pairs}
+    phases = []
+    current = None
+    prev_sig = None
     for r in rounds:
         active = r["round"] >= pair_start_round
         resting = set(r["resting"])
+        units = _rest_units(players, fixed_pairs, active, together_counts, pair_target)
+        sig = _units_signature(units)
+        if current is None or sig != prev_sig:
+            current = {"units": units, "co": Counter()}
+            phases.append(current)
+        prev_sig = sig
+
+        # A split is only a split while the pair is still a unit (under
+        # target); dissolved members resting separately is the v2 semantics.
+        unit_pairs = {frozenset(u) for u in units if len(u) == 2}
         if active:
             for pair in fixed_pairs:
+                if frozenset(pair) not in unit_pairs:
+                    continue
                 overlap = resting & set(pair)
                 if overlap and len(overlap) < len(pair):
                     issues.append({
@@ -522,14 +574,17 @@ def _fairness_issues(rounds, players, fixed_pairs, pair_start_round):
                         "affected": [f"{pair[0]} & {pair[1]}"],
                         "unavoidable": False,
                     })
-        units = _rest_units(players, fixed_pairs, active)
-        phase = phases.setdefault(active, {"units": units, "co": Counter()})
         full = [frozenset(u) for u in units if set(u) <= resting]
         for a, b in combinations(full, 2):
-            phase["co"][_co_key(a, b)] += 1
+            current["co"][_co_key(a, b)] += 1
+
+        for a, b in r["courts"]:
+            for pair in fixed_pairs:
+                if (pair[0] in a and pair[1] in a) or (pair[0] in b and pair[1] in b):
+                    together_counts[pair] += 1
 
     corest_spread = 0
-    for phase in phases.values():
+    for phase in phases:
         unit_pairs = list(combinations(phase["units"], 2))
         if not unit_pairs:
             continue
@@ -626,10 +681,10 @@ def _fairness_issues(rounds, players, fixed_pairs, pair_start_round):
     return issues, rest_spread, corest_spread, matchup_spread
 
 
-def fairness_report(rounds, players, fixed_pairs, pair_start_round):
+def fairness_report(rounds, players, fixed_pairs, pair_start_round, pair_target=None):
     """C-1 AC-W1: the structured fairness report for a generated roster."""
     issues, rest_spread, corest_spread, matchup_spread = _fairness_issues(
-        rounds, players, fixed_pairs, pair_start_round
+        rounds, players, fixed_pairs, pair_start_round, pair_target
     )
     return {
         "rest_spread": rest_spread,
@@ -639,13 +694,13 @@ def fairness_report(rounds, players, fixed_pairs, pair_start_round):
     }
 
 
-def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
+def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round, pair_target=None):
     """Fairness warnings as plain strings (rule-prefixed), one per issue.
 
     Kept for backward compatibility: the API appends these to `warnings`
     while the structured report rides in `fairness`.
     """
-    issues, _, _, _ = _fairness_issues(rounds, players, fixed_pairs, pair_start_round)
+    issues, _, _, _ = _fairness_issues(rounds, players, fixed_pairs, pair_start_round, pair_target)
     return [f"{issue['rule']}: {issue['summary']}" for issue in issues]
 
 
@@ -924,18 +979,33 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
     )
 
     # Co-rest bookkeeping for the greedy fallback: how often each pair of
-    # rest units rested together. Reset when the unit structure changes
-    # (fixed pairs activating).
+    # rest units rested together. Reset whenever the unit structure changes
+    # (pairs activating, or a pair dissolving after completing its
+    # together-target).
     co_rest = {}
     last_resting = None
-    pairs_active_previous = False
+    prev_units_sig = None
 
     for rnd in range(num_rounds):
         round_num = rnd + 1
         pairs_active = bool(fixed_pairs) and round_num >= pair_start_round
-        if pairs_active != pairs_active_previous:
+
+        # Target-aware units: a pair that completed its pair_games target
+        # is dissolved into two independent players (C-1 v2 semantics).
+        units = _rest_units(
+            players, fixed_pairs, pairs_active,
+            pair_counts=fixed_pair_counts, pair_target=pair_target,
+        )
+        units_sig = _units_signature(units)
+        if units_sig != prev_units_sig:
             co_rest = {}
-        pairs_active_previous = pairs_active
+        prev_units_sig = units_sig
+
+        active_pair_map = {}
+        for a, b in fixed_pairs:
+            if fixed_pair_counts.get((a, b), 0) < pair_target:
+                active_pair_map[a] = b
+                active_pair_map[b] = a
 
         if schedule is not None:
             resting = set(schedule[rnd][0])
@@ -948,12 +1018,11 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
             resting = _select_resting_set(
                 players, num_resting, must_rest, cannot_rest,
                 rest_counts, consec_play, co_rest, last_resting,
-                fixed_pairs, pairs_active, rng,
+                units, active_pair_map, rng,
             )
             planned_courts = None
         last_resting = frozenset(resting)
 
-        units = _rest_units(players, fixed_pairs, pairs_active)
         fully_resting = [frozenset(u) for u in units if set(u) <= resting]
         for unit_a, unit_b in combinations(fully_resting, 2):
             key = _co_key(unit_a, unit_b)
@@ -1016,7 +1085,7 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
         rounds.append({"round": round_num, "courts": courts, "resting": sorted(resting)})
 
-    warnings.extend(_fairness_warnings(rounds, players, fixed_pairs, pair_start_round))
+    warnings.extend(_fairness_warnings(rounds, players, fixed_pairs, pair_start_round, pair_target))
     return rounds, rest_counts, fixed_pair_counts, warnings
 
 

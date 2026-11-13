@@ -1998,7 +1998,10 @@ def _build_roster_response_from_rounds(
         fixed_pair_counts={f"{a} & {b}": count for (a, b), count in fixed_pair_counts.items()},
         violations=violations,
         warnings=warnings or [],
-        fairness=FairnessReport(**fairness_report(rounds, players, fixed_pairs, pair_start_round)),
+        fairness=FairnessReport(**fairness_report(
+            rounds, players, fixed_pairs, pair_start_round,
+            None if draw_type == "league_knockout" else pair_games,
+        )),
     )
 
 
@@ -2153,7 +2156,10 @@ def api_generate(req: RosterRequest):
             fixed_pair_counts=fpc_str,
             violations=violations,
             warnings=warnings,
-            fairness=FairnessReport(**fairness_report(rounds, req.players, fixed_pairs, req.pair_start_round)),
+            fairness=FairnessReport(**fairness_report(
+                rounds, req.players, fixed_pairs, req.pair_start_round,
+                None if req.draw_type == "league_knockout" else req.pair_games,
+            )),
         )
 
     if req.seed is None:
