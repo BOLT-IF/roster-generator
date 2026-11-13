@@ -42,36 +42,42 @@ class _SearchBudgetExceeded(Exception):
     """Internal: the rest-schedule search blew its application budget."""
 
 
-def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
-                        fixed_pairs, pair_start_round, max_consecutive_rest,
-                        rng, application_budget=40000, candidate_cap=300):
-    """Plan the whole session's rest schedule with backtracking search.
+def _plan_schedule(players, num_rounds, num_courts, num_resting, consecutive_limits,
+                   fixed_pairs, pair_start_round, max_consecutive_rest,
+                   rng, application_budget=40000, candidate_cap=300):
+    """Plan the whole session's rest schedule and (for pure fixed-pair
+    rounds) the court pairings, with backtracking search.
 
     Tries the strictest fairness rules first and relaxes in tiers, following
     the C-1 precedence (limits > max-consecutive-rest > rest-count spread >
-    co-rest variety / no back-to-back). Organizer limits (consecutive-game
-    limits) are honored in every tier; everything else drops one tier at a
-    time. Returns a list of frozensets (resting players per round), or None
-    when no tier succeeded within its budget — the caller then falls back
-    to the greedy per-round selection.
+    co-rest variety > matchup balance > no back-to-back). Organizer limits
+    (consecutive-game limits) are honored in every tier; everything else
+    drops one tier at a time. Returns a list of (resting_set, courts)
+    tuples per round — courts is a list of (pair, pair) matchups for pure
+    fixed-pair rounds, else None (the caller assigns courts greedily) —
+    or None when no tier succeeded within its budget, in which case the
+    caller falls back entirely to the greedy per-round selection.
     """
-    if num_resting <= 0:
-        return [frozenset()] * num_rounds
-
     units_per_round = [
         _rest_units(players, fixed_pairs, rnd + 1 >= pair_start_round)
         for rnd in range(num_rounds)
     ]
     no_limit = num_rounds + 1
     all_players = frozenset(players)
+    n_pairs = len(fixed_pairs)
+    pair_pool = n_pairs * (n_pairs - 1) // 2
 
     # --- arithmetic feasibility pre-checks (skip tiers that cannot work) ---
     def mcr_feasible():
         # A player resting at most m consecutive rounds must play at least
         # one round in between, so the resting share is at most m/(m+1).
+        if num_resting <= 0:
+            return True
         return num_resting * (max_consecutive_rest + 1) <= len(players) * max_consecutive_rest
 
     def co_feasible():
+        if num_resting <= 0:
+            return True
         # Fewest rest units a round can use (largest units first); every
         # pair of co-resting units consumes one co-rest slot.
         for units in units_per_round:
@@ -84,25 +90,32 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
                     return False
         return True
 
-    tiers = []
-    # Relaxation ladder, strictest first. Organizer limits (must_rest) are
-    # honored in every tier; max-consecutive-rest is kept while arithmetically
-    # possible; rest-count spread outlasts co-rest variety, which outlasts the
-    # no-back-to-back rule (C-1 precedence §3). The "spread" co mode allows a
-    # unit pair to reach floor(events/pairs)+1 during the session but requires
-    # the final co-rest spread to be ≤ 1.
-    mcr_ok = mcr_feasible()
+    def matchup_feasible():
+        # Matchup planning needs at least two active fixed pairs.
+        return n_pairs >= 2 and pair_start_round <= num_rounds
 
-    def tier(co_mode, b2b=True, spread=True):
-        flags = {"co": co_mode, "b2b": b2b, "spread": spread}
+    mcr_ok = mcr_feasible()
+    matchup_ok = matchup_feasible()
+
+    def tier(co_mode, b2b=True, spread=True, matchup=False):
+        flags = {"co": co_mode, "b2b": b2b, "spread": spread, "matchup": matchup}
         if mcr_ok:
             flags["mcr"] = True
         return flags
 
+    # Relaxation ladder, strictest first: matchup balance (priority 6)
+    # relaxes before co-rest variety (5), which relaxes before the
+    # no-back-to-back rule; rest-count spread outlasts both.
     tiers = []
     if co_feasible():
+        if matchup_ok:
+            tiers.append(tier("cap1", matchup=True))
         tiers.append(tier("cap1"))
+    if matchup_ok:
+        tiers.append(tier("spread", matchup=True))
     tiers.append(tier("spread"))
+    if matchup_ok:
+        tiers.append(tier(None, matchup=True))
     tiers.append(tier(None))
     tiers.append(tier(None, b2b=False))
     if mcr_ok:
@@ -157,7 +170,30 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
         scored.sort(key=lambda item: item[0])
         return [resting for _, resting in scored[:candidate_cap]]
 
-    def dfs(rnd, rest_counts, consec_play, consec_rest, co, co_done, prev_resting, flags, budget):
+    def court_arrangements(resting):
+        """All ways to split the playing fixed pairs into courts, or None
+        when the round is not a pure fixed-pair round (singles or split
+        pairs playing). Each arrangement is a tuple of (pair, pair)."""
+        playing = all_players - resting
+        playing_pairs = [p for p in fixed_pairs if p[0] in playing and p[1] in playing]
+        needed = 2 * num_courts
+        if len(playing_pairs) != needed or len(playing) != 2 * needed:
+            return None
+        partitions = []
+
+        def part(remaining, acc):
+            if not remaining:
+                partitions.append(tuple(acc))
+                return
+            first = remaining[0]
+            for i in range(1, len(remaining)):
+                part(remaining[1:i] + remaining[i + 1:], acc + [(first, remaining[i])])
+
+        part(playing_pairs, [])
+        return partitions
+
+    def dfs(rnd, rest_counts, consec_play, consec_rest, co, co_done,
+            matchup, prev_resting, flags, budget):
         if rnd == num_rounds:
             if flags.get("co") == "spread":
                 for phase_units, phase_co in co_done + ((units_per_round[rnd - 1], co),):
@@ -172,6 +208,13 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
                     ]
                     if max(values) - min(values) > 1:
                         return None
+            if flags.get("matchup") and pair_pool:
+                values = [
+                    matchup.get(_co_key(frozenset(a), frozenset(b)), 0)
+                    for a, b in combinations(fixed_pairs, 2)
+                ]
+                if max(values) - min(values) > 1:
+                    return None
             return []
         round_num = rnd + 1
         must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
@@ -191,7 +234,7 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
             budget[0] -= 1
             if budget[0] < 0:
                 raise _SearchBudgetExceeded()
-            if flags.get("b2b") and prev_resting is not None and resting == prev_resting:
+            if flags.get("b2b") and resting and prev_resting is not None and resting == prev_resting:
                 continue
 
             new_counts = dict(rest_counts)
@@ -218,10 +261,10 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
                 continue
             if co_mode == "spread":
                 unit_count = len(units)
-                pair_count = unit_count * (unit_count - 1) // 2
-                if pair_count and new_co:
+                unit_pair_count = unit_count * (unit_count - 1) // 2
+                if unit_pair_count and new_co:
                     events = sum(new_co.values())
-                    allowed_max = events // pair_count + 1
+                    allowed_max = events // unit_pair_count + 1
                     if max(new_co.values()) > allowed_max:
                         continue
 
@@ -235,9 +278,51 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
                     new_cp[p] += 1
                     new_cr[p] = 0
 
-            tail = dfs(rnd + 1, new_counts, new_cp, new_cr, new_co, phase_done, resting, flags, budget)
-            if tail is not None:
-                return [resting] + tail
+            # Court pairings: only pure fixed-pair rounds in active phases
+            # can be planned; everything else falls to the greedy assigner.
+            if flags.get("matchup") and round_num >= pair_start_round:
+                arrangements = court_arrangements(resting)
+            else:
+                arrangements = None
+            if arrangements is None:
+                branches = [(None, matchup)]
+            else:
+                def arrangement_cost(arr):
+                    return sum(
+                        (matchup.get(_co_key(a, b), 0) + 1) ** 2 for a, b in arr
+                    )
+                arrangements = sorted(
+                    arrangements, key=lambda arr: (arrangement_cost(arr), rng.random())
+                )
+                branches = [
+                    (arr, matchup)
+                    for arr in arrangements
+                ]
+
+            for arrangement, _ in branches:
+                budget[0] -= 1
+                if budget[0] < 0:
+                    raise _SearchBudgetExceeded()
+                new_matchup = dict(matchup)
+                ok = True
+                if arrangement:
+                    for a, b in arrangement:
+                        key = _co_key(a, b)
+                        new_matchup[key] = new_matchup.get(key, 0) + 1
+                    if pair_pool and new_matchup:
+                        total = sum(new_matchup.values())
+                        allowed_max = total // pair_pool + 1
+                        if max(new_matchup.values()) > allowed_max:
+                            ok = False
+                if not ok:
+                    continue
+
+                tail = dfs(
+                    rnd + 1, new_counts, new_cp, new_cr, new_co, phase_done,
+                    new_matchup, resting, flags, budget,
+                )
+                if tail is not None:
+                    return [(resting, arrangement)] + tail
         return None
 
     for flags in tiers:
@@ -250,6 +335,7 @@ def _plan_rest_schedule(players, num_rounds, num_resting, consecutive_limits,
                 {p: 0 for p in players},
                 {},
                 (),
+                {},
                 None,
                 flags,
                 budget,
@@ -386,27 +472,31 @@ def _select_resting_set(players, num_resting, must_rest, cannot_rest,
     return best_set
 
 
-def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
-    """Derive rest-fairness warnings purely from the generated roster.
+def _fairness_issues(rounds, players, fixed_pairs, pair_start_round):
+    """Derive structured C-1 fairness issues purely from the roster.
 
     Rules (C-1-REQUIREMENTS.md §5): rest_spread, rest_unit_split,
-    corest_spread. Strings are prefixed with the rule name so later layers
-    can structure them; the planner shows them as-is.
+    corest_spread, matchup_spread (with an unavoidable flag when the
+    unevenness is arithmetically forced), and partner_repeat for rotating
+    mode. Each issue is {rule, summary, affected, unavoidable}.
     """
-    warnings = []
+    issues = []
 
     rest_counts = Counter()
     for r in rounds:
         for p in r["resting"]:
             rest_counts[p] += 1
     counts = [rest_counts.get(p, 0) for p in players]
-    if counts and max(counts) - min(counts) > 1:
+    rest_spread = (max(counts) - min(counts)) if counts else 0
+    if rest_spread > 1:
         high = [p for p in players if rest_counts.get(p, 0) == max(counts)]
         low = [p for p in players if rest_counts.get(p, 0) == min(counts)]
-        warnings.append(
-            f"rest_spread: {', '.join(high)} rest {max(counts)}× "
-            f"while {', '.join(low)} rest {min(counts)}×"
-        )
+        issues.append({
+            "rule": "rest_spread",
+            "summary": f"{', '.join(high)} rest {max(counts)}× while {', '.join(low)} rest {min(counts)}×",
+            "affected": high,
+            "unavoidable": False,
+        })
 
     phases = {}
     for r in rounds:
@@ -416,15 +506,19 @@ def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
             for pair in fixed_pairs:
                 overlap = resting & set(pair)
                 if overlap and len(overlap) < len(pair):
-                    warnings.append(
-                        f"rest_unit_split: {pair[0]} & {pair[1]} split in round {r['round']}"
-                    )
+                    issues.append({
+                        "rule": "rest_unit_split",
+                        "summary": f"{pair[0]} & {pair[1]} split in round {r['round']}",
+                        "affected": [f"{pair[0]} & {pair[1]}"],
+                        "unavoidable": False,
+                    })
         units = _rest_units(players, fixed_pairs, active)
         phase = phases.setdefault(active, {"units": units, "co": Counter()})
         full = [frozenset(u) for u in units if set(u) <= resting]
         for a, b in combinations(full, 2):
             phase["co"][_co_key(a, b)] += 1
 
+    corest_spread = 0
     for phase in phases.values():
         unit_pairs = list(combinations(phase["units"], 2))
         if not unit_pairs:
@@ -433,29 +527,139 @@ def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
             phase["co"].get(_co_key(frozenset(a), frozenset(b)), 0)
             for a, b in unit_pairs
         ]
+        corest_spread = max(corest_spread, max(values) - min(values))
         if max(values) - min(values) > 1:
             hottest = [
                 f"{' & '.join(k[0])} + {' & '.join(k[1])}"
                 for k, v in phase["co"].items()
                 if v == max(values)
             ][:3]
-            warnings.append(
-                f"corest_spread: {'; '.join(hottest)} rest together {max(values)}× "
-                f"while some units never rest together"
-            )
+            issues.append({
+                "rule": "corest_spread",
+                "summary": f"{'; '.join(hottest)} rest together {max(values)}× while some units never rest together",
+                "affected": hottest,
+                "unavoidable": False,
+            })
 
-    return warnings
+    matchup_spread = 0
+    if fixed_pairs:
+        # Fixed-pair mode: pair-vs-pair meetings (AC-M1/M2/M4).
+        pair_sets = {frozenset(p) for p in fixed_pairs}
+        matchup_counts = Counter()
+        for r in rounds:
+            if r["round"] < pair_start_round:
+                continue
+            for a, b in r["courts"]:
+                ta, tb = frozenset(a), frozenset(b)
+                if ta in pair_sets and tb in pair_sets:
+                    matchup_counts[_co_key(a, b)] += 1
+        keys = [_co_key(frozenset(a), frozenset(b)) for a, b in combinations(fixed_pairs, 2)]
+        values = [matchup_counts.get(k, 0) for k in keys]
+        matchup_spread = (max(values) - min(values)) if values else 0
+        if matchup_spread >= 1:
+            total_matches = sum(matchup_counts.values())
+            unavoidable = total_matches > len(keys)
+            shorted = [k for k in keys if matchup_counts.get(k, 0) == min(values)]
+            labels = [f"{' & '.join(k[0])} vs {' & '.join(k[1])}" for k in shorted]
+            summary = (
+                f"{len(shorted)} matchup(s) meet {min(values)}× while others meet {max(values)}×"
+            )
+            if unavoidable:
+                summary += f" (unavoidable with {len(rounds)} rounds)"
+            issues.append({
+                "rule": "matchup_spread",
+                "summary": summary,
+                "affected": labels,
+                "unavoidable": unavoidable,
+            })
+    else:
+        # Rotating mode: opponent balance (target spread ≤2) and partner
+        # usage (every pairing once before any repeat) — AC-M3.
+        opponent_counts = Counter()
+        partnership_used = set()
+        partnership_repeats = Counter()
+        for r in rounds:
+            for a, b in r["courts"]:
+                for x in a:
+                    for y in b:
+                        opponent_counts[tuple(sorted((x, y)))] += 1
+                for team in (a, b):
+                    key = tuple(sorted(team))
+                    if key in partnership_used:
+                        partnership_repeats[key] += 1
+                    else:
+                        partnership_used.add(key)
+        player_pairs = [tuple(sorted(x)) for x in combinations(players, 2)]
+        values = [opponent_counts.get(k, 0) for k in player_pairs]
+        matchup_spread = (max(values) - min(values)) if values else 0
+        if matchup_spread > 2:
+            hottest = [k for k in player_pairs if opponent_counts.get(k, 0) == max(values)][:3]
+            issues.append({
+                "rule": "matchup_spread",
+                "summary": f"opponents meet between {min(values)}× and {max(values)}× (target spread ≤2)",
+                "affected": [f"{k[0]} vs {k[1]}" for k in hottest],
+                "unavoidable": False,
+            })
+        if partnership_repeats and len(partnership_used) < len(player_pairs):
+            repeated = list(partnership_repeats)[:3]
+            never = [k for k in player_pairs if k not in partnership_used][:3]
+            issues.append({
+                "rule": "partner_repeat",
+                "summary": (
+                    f"{sum(partnership_repeats.values())} partnership repeat(s) "
+                    f"while {len(player_pairs) - len(partnership_used)} pairing(s) never used"
+                ),
+                "affected": [f"{' & '.join(k)}" for k in repeated] + [f"never: {' & '.join(k)}" for k in never],
+                "unavoidable": False,
+            })
+
+    return issues, rest_spread, corest_spread, matchup_spread
+
+
+def fairness_report(rounds, players, fixed_pairs, pair_start_round):
+    """C-1 AC-W1: the structured fairness report for a generated roster."""
+    issues, rest_spread, corest_spread, matchup_spread = _fairness_issues(
+        rounds, players, fixed_pairs, pair_start_round
+    )
+    return {
+        "rest_spread": rest_spread,
+        "corest_spread": corest_spread,
+        "matchup_spread": matchup_spread,
+        "issues": issues,
+    }
+
+
+def _fairness_warnings(rounds, players, fixed_pairs, pair_start_round):
+    """Fairness warnings as plain strings (rule-prefixed), one per issue.
+
+    Kept for backward compatibility: the API appends these to `warnings`
+    while the structured report rides in `fairness`.
+    """
+    issues, _, _, _ = _fairness_issues(rounds, players, fixed_pairs, pair_start_round)
+    return [f"{issue['rule']}: {issue['summary']}" for issue in issues]
 
 
 def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
-                      fixed_pair_counts, pair_target, pairs_active):
+                      fixed_pair_counts, pair_target, pairs_active,
+                      matchup_history):
     score = 0
+    pair_sets = {frozenset(p) for p in fixed_pairs} if pairs_active else set()
     for team_a, team_b in courts:
-        score += partner_history.get(tuple(sorted(team_a)), 0) * 3
-        score += partner_history.get(tuple(sorted(team_b)), 0) * 3
+        score += partner_history.get(tuple(sorted(team_a)), 0) * _PARTNER_WEIGHT
+        score += partner_history.get(tuple(sorted(team_b)), 0) * _PARTNER_WEIGHT
         for pa in team_a:
             for pb in team_b:
-                score += opponent_history.get(tuple(sorted([pa, pb])), 0)
+                count = opponent_history.get(tuple(sorted([pa, pb])), 0)
+                score += _OPPONENT_WEIGHT * count * count
+        if pairs_active:
+            ta, tb = frozenset(team_a), frozenset(team_b)
+            if ta in pair_sets and tb in pair_sets:
+                # C-1 AC-M1/M2: convex in the meeting count — a linear
+                # penalty cannot distinguish arrangements whose count SUMS
+                # are equal, so spread would not improve. Quadratic cost
+                # makes balanced arrangements strictly cheaper.
+                count = matchup_history.get(_co_key(team_a, team_b), 0)
+                score += _MATCHUP_WEIGHT * count * count
 
     for pair in fixed_pairs:
         playing_members = set()
@@ -473,7 +677,7 @@ def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
             if fixed_pair_counts.get(pair, 0) >= pair_target:
                 continue
             if len(playing_members) == 2 and not together:
-                score += 100
+                score += _PAIR_SPLIT_WEIGHT
         else:
             if together:
                 score += 200
@@ -481,11 +685,81 @@ def _score_assignment(courts, partner_history, opponent_history, fixed_pairs,
     return score
 
 
+# Balance weights for the court-assignment search (C-1 AC-M1..M3).
+# Matchup and opponent costs are CONVEX (count squared): linear penalties
+# are blind to arrangements with equal count sums, which is exactly the
+# matchup-spread failure mode. The pair-split weight dominates repeat
+# matchups so pair-vs-pair courts always win over mixed teams, and the
+# partner weight dominates opponent savings so rotating mode uses every
+# partnership once before any repeat (in pure fixed-pair rounds the
+# partner term is arrangement-invariant, so the large weight is harmless).
+_PARTNER_WEIGHT = 40
+_OPPONENT_WEIGHT = 2
+_MATCHUP_WEIGHT = 30
+_PAIR_SPLIT_WEIGHT = 300
+
+
+def _enumerate_pairings(items):
+    """All ways to split items into unordered pairs (105 for 8 items)."""
+    results = []
+
+    def rec(remaining, acc):
+        if not remaining:
+            results.append(tuple(acc))
+            return
+        first = remaining[0]
+        for i in range(1, len(remaining)):
+            rec(remaining[1:i] + remaining[i + 1:], acc + [(first, remaining[i])])
+
+    rec(list(items), [])
+    return results
+
+
+def _best_rotating_assignment(playing, num_courts, partner_history,
+                              opponent_history, fixed_pairs,
+                              fixed_pair_counts, pair_target, rng):
+    """Exhaustive court assignment for rotating rounds (no active pairs).
+
+    Systematically enumerates every team partition and court grouping for
+    small playing sets (up to 8 players / 2 courts) instead of sampling
+    random attempts: the joint partner/opponent objectives need the full
+    arrangement space, which random restarts miss (AC-M3). The enumeration
+    order is rng-shuffled first so ties stay seed-dependent.
+    """
+    team_partitions = _enumerate_pairings(sorted(playing))
+    rng.shuffle(team_partitions)
+    groupings = _enumerate_pairings(range(2 * num_courts))
+
+    best, best_score = None, float("inf")
+    for partition in team_partitions:
+        teams = [tuple(sorted(team)) for team in partition]
+        for grouping in groupings:
+            courts = tuple(
+                (teams[a], teams[b]) for a, b in grouping
+            )
+            s = _score_assignment(
+                courts, partner_history, opponent_history,
+                fixed_pairs, fixed_pair_counts, pair_target,
+                False, {},
+            )
+            if s < best_score:
+                best_score = s
+                best = [c for c in courts]
+    return best
+
+
 def _best_court_assignment(playing, num_courts, partner_history, opponent_history,
                            fixed_pairs, fixed_pair_counts, pair_target,
-                           pairs_active, attempts=500, rng=None):
+                           pairs_active, attempts=500, rng=None, matchup_history=None):
     shuffler = rng if rng is not None else random
     playing_set = set(playing)
+    if not pairs_active and len(playing) <= 8 and len(playing) == 4 * num_courts:
+        exhaustive = _best_rotating_assignment(
+            playing, num_courts, partner_history, opponent_history,
+            fixed_pairs, fixed_pair_counts, pair_target, shuffler,
+        )
+        if exhaustive is not None:
+            return exhaustive
     if pairs_active:
         active_pairs = [
             p for p in fixed_pairs
@@ -530,7 +804,7 @@ def _best_court_assignment(playing, num_courts, partner_history, opponent_histor
 
         s = _score_assignment(courts, partner_history, opponent_history,
                               fixed_pairs, fixed_pair_counts, pair_target,
-                              pairs_active)
+                              pairs_active, matchup_history or {})
         if s < best_score:
             best_score = s
             best = [c for c in courts]
@@ -624,15 +898,17 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
     consec_rest = {p: 0 for p in players}
     partner_history = {}
     opponent_history = {}
+    matchup_history = {}
     fixed_pair_counts = {p: 0 for p in fixed_pairs}
     rounds = []
 
-    # C-1: plan the whole-session rest schedule first (tiered fairness
-    # rules via backtracking); fall back to the greedy per-round selection
-    # when planning fails. All randomness flows through the seeded rng, so
-    # the plan is reproducible per seed and varies across seeds.
-    rest_plan = _plan_rest_schedule(
-        players, num_rounds, num_resting, consecutive_limits,
+    # C-1: plan the whole-session schedule first (rest sets +, for pure
+    # fixed-pair rounds, court pairings) via tiered backtracking; fall back
+    # to the greedy per-round selection when planning fails. All randomness
+    # flows through the seeded rng, so the plan is reproducible per seed
+    # and varies across seeds.
+    schedule = _plan_schedule(
+        players, num_rounds, num_courts, num_resting, consecutive_limits,
         fixed_pairs, pair_start_round, max_consecutive_rest, rng,
     )
 
@@ -645,13 +921,14 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
     for rnd in range(num_rounds):
         round_num = rnd + 1
-        pairs_active = round_num >= pair_start_round
+        pairs_active = bool(fixed_pairs) and round_num >= pair_start_round
         if pairs_active != pairs_active_previous:
             co_rest = {}
         pairs_active_previous = pairs_active
 
-        if rest_plan is not None:
-            resting = set(rest_plan[rnd])
+        if schedule is not None:
+            resting = set(schedule[rnd][0])
+            planned_courts = schedule[rnd][1]
         else:
             no_limit = num_rounds + 1
             must_rest = {p for p in players if consec_play[p] >= consecutive_limits.get(p, no_limit)}
@@ -662,6 +939,7 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
                 rest_counts, consec_play, co_rest, last_resting,
                 fixed_pairs, pairs_active, rng,
             )
+            planned_courts = None
         last_resting = frozenset(resting)
 
         units = _rest_units(players, fixed_pairs, pairs_active)
@@ -672,11 +950,17 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
 
         playing = [p for p in players if p not in resting]
 
-        courts = _best_court_assignment(
-            playing, num_courts, partner_history, opponent_history,
-            fixed_pairs, fixed_pair_counts, pair_target,
-            pairs_active, rng=rng,
-        )
+        if planned_courts is not None:
+            courts = [
+                (tuple(sorted(team_a)), tuple(sorted(team_b)))
+                for team_a, team_b in planned_courts
+            ]
+        else:
+            courts = _best_court_assignment(
+                playing, num_courts, partner_history, opponent_history,
+                fixed_pairs, fixed_pair_counts, pair_target,
+                pairs_active, rng=rng, matchup_history=matchup_history,
+            )
 
         # Structural safety net: every player must appear exactly once per
         # round - on a court or resting. A future engine change that breaks
@@ -702,7 +986,12 @@ def generate_roster(players, num_courts, num_rounds, consecutive_limits,
             consec_play[p] += 1
             consec_rest[p] = 0
 
+        fixed_pair_set = {frozenset(p) for p in fixed_pairs}
         for team_a, team_b in courts:
+            ta, tb = frozenset(team_a), frozenset(team_b)
+            if pairs_active and ta in fixed_pair_set and tb in fixed_pair_set:
+                key = _co_key(team_a, team_b)
+                matchup_history[key] = matchup_history.get(key, 0) + 1
             partner_history[team_a] = partner_history.get(team_a, 0) + 1
             partner_history[team_b] = partner_history.get(team_b, 0) + 1
             for pa in team_a:
