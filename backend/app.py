@@ -547,7 +547,9 @@ def _ensure_score_slot(scores: list[list[dict[str, int | str]]], round_index: in
 
 
 def _normalize_player_name(value: str) -> str:
-    return " ".join(value.strip().lower().split())
+    # NFC-fold so composed and decomposed forms of the same name (precomposed
+    # 'é' vs 'e' + combining accent) map to one player identity.
+    return unicodedata.normalize("NFC", " ".join(value.strip().lower().split()))
 
 
 def _backfill_player_normalized_names(db):
@@ -578,7 +580,16 @@ def _backfill_player_normalized_names(db):
 
 
 def _generate_player_id() -> str:
-    return f"plr_{secrets.token_hex(4)}"
+    # 64 bits of entropy (was 32): ids appear in public session payloads and
+    # should not be enumerable at internet scale.
+    return f"plr_{secrets.token_hex(8)}"
+
+
+def _unused_player_id(db) -> str:
+    player_id = _generate_player_id()
+    while db.get(PlayerRecord, player_id) is not None:
+        player_id = _generate_player_id()
+    return player_id
 
 
 def _serialize_player(row: PlayerRecord) -> PlayerResponse:
@@ -596,7 +607,7 @@ def _create_player_record(db, full_name: str, short_name: str, *, source: str):
     normalized_full_name = _normalize_player_name(full_name)
     normalized_short_name = _normalize_player_name(short_name)
     player = PlayerRecord(
-        player_id=_generate_player_id(),
+        player_id=_unused_player_id(db),
         full_name=full_name,
         short_name=short_name,
         normalized_full_name=normalized_full_name,
@@ -627,7 +638,7 @@ def _ensure_legacy_player_record(db, full_name: str, short_name: str):
         return existing_player, False
 
     values = {
-        "player_id": _generate_player_id(),
+        "player_id": _unused_player_id(db),
         "full_name": full_name,
         "short_name": short_name,
         "normalized_full_name": normalized_full_name,
@@ -1488,7 +1499,25 @@ def _sync_completed_session_stats(db, record: SharedSessionRecord, payload: dict
         pair_standings = _build_pair_standings(league_rounds, league_scores)
         champion_pair = pair_standings[0][0] if pair_standings else None
 
-    completed_at = record.updated_at
+    # Stamp completion once and reuse it: taking updated_at on every sync
+    # made any later mutation (even a rename) shift the session's position
+    # in history. The stamp is written through the live payload on the
+    # write path (first completion always happens via end-round).
+    completed_at_value = payload.get("completed_at")
+    if isinstance(completed_at_value, str):
+        try:
+            completed_at = datetime.fromisoformat(completed_at_value)
+        except ValueError:
+            completed_at = record.updated_at
+    else:
+        completed_at = record.updated_at
+        if completion_state["completed"]:
+            stamp = completed_at.isoformat()
+            payload["completed_at"] = stamp
+            # db.refresh in _update_session_record replaces record.data with
+            # a freshly deserialized dict, so the stamp must be written onto
+            # the record itself (a plain in-place payload edit is lost).
+            record.data = dict(record.data or {}, completed_at=stamp)
     draw_type = payload.get("draw_config", {}).get("draw_type", "round_robin")
 
     db.add(

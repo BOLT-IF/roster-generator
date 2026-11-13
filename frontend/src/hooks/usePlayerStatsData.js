@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchPlayerStats, listPlayerStats } from "../api";
 import { normalizePlayerDetail, normalizePlayerSummary } from "./appStateUtils";
 
@@ -9,6 +9,8 @@ export default function usePlayerStatsData({ view }) {
   const [playerStatsDetail, setPlayerStatsDetail] = useState(null);
   const [playerStatsDetailLoading, setPlayerStatsDetailLoading] = useState(false);
   const [pageError, setPageError] = useState(null);
+  // Monotonic id of the latest detail request; older completions are ignored.
+  const detailRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (view === "player-stats") {
@@ -33,8 +35,15 @@ export default function usePlayerStatsData({ view }) {
   }, [playerStats, playerStatsDetail, selectedPlayer]);
 
   useEffect(() => {
-    if (view !== "player-stats" || !selectedPlayer) return;
-    void loadPlayerStatsDetail(selectedPlayer);
+    // Selection changed: drop the previous player's profile right away and
+    // invalidate any request still in flight for it.
+    detailRequestIdRef.current += 1;
+    setPlayerStatsDetail(null);
+    if (view !== "player-stats" || !selectedPlayer) {
+      setPlayerStatsDetailLoading(false);
+      return;
+    }
+    void loadPlayerStatsDetail(selectedPlayer, detailRequestIdRef.current);
   }, [selectedPlayer, view]);
 
   async function loadPlayerStats() {
@@ -50,16 +59,20 @@ export default function usePlayerStatsData({ view }) {
     }
   }
 
-  async function loadPlayerStatsDetail(playerName) {
+  async function loadPlayerStatsDetail(playerName, requestId) {
     setPlayerStatsDetailLoading(true);
     setPageError(null);
     try {
       const detail = await fetchPlayerStats(playerName);
+      if (requestId !== detailRequestIdRef.current) return;
       setPlayerStatsDetail(normalizePlayerDetail(detail));
     } catch (error) {
+      if (requestId !== detailRequestIdRef.current) return;
       setPageError(error.message);
     } finally {
-      setPlayerStatsDetailLoading(false);
+      if (requestId === detailRequestIdRef.current) {
+        setPlayerStatsDetailLoading(false);
+      }
     }
   }
 

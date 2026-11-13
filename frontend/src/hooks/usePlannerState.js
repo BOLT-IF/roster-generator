@@ -204,11 +204,9 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
       setPlannerStep(3);
       navigateToPlanner();
     } catch (error) {
+      // Keep the previous roster, its signature and any manual edits: a failed
+      // request must not destroy work the organiser already has.
       setGenerateError(error.message);
-      setRoster(null);
-      setGeneratedRosterBaseline(null);
-      setRosterSignature(null);
-      setHasManualRosterEdits(false);
       setSelectedRosterTarget(null);
       window.setTimeout(() => {
         reviewStepRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -225,8 +223,12 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
       const normalized = await revalidateRoster(
         getRosterRevalidatePayload(nextRoster, selectedPlayerShortNames, fixedPairs, config)
       );
-      setRoster(normalized);
-      setHasManualRosterEdits(true);
+      // A swap that normalises back to the same rounds (e.g. reordering the two
+      // players of one team) is not an edit: leave the roster and flag alone.
+      if (JSON.stringify(normalized?.rounds) !== JSON.stringify(roster?.rounds)) {
+        setRoster(normalized);
+        setHasManualRosterEdits(true);
+      }
       setSelectedRosterTarget(null);
     } catch (error) {
       setPlannerError(error.message);

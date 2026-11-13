@@ -1632,5 +1632,160 @@ class SeedGatingTests(unittest.TestCase):
         )
 
 
+class PlayerIdEntropyTests(unittest.TestCase):
+    """L-07a: player ids get 64-bit entropy and regenerate on collision.
+
+    Ids were plr_ + 32 bits — enumerable at internet scale, and a collision
+    would fail the insert with a raw IntegrityError.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_player_ids_have_64_bit_entropy(self):
+        import re
+
+        from app import _generate_player_id
+
+        ids = {_generate_player_id() for _ in range(1000)}
+        self.assertEqual(len(ids), 1000)
+        for player_id in ids:
+            self.assertTrue(re.fullmatch(r"plr_[0-9a-f]{16}", player_id), f"bad id shape: {player_id}")
+
+    def test_create_regenerates_on_id_collision(self):
+        import uuid
+        from unittest.mock import patch
+
+        import app as app_module
+
+        tag = uuid.uuid4().hex[:8]
+        first = self.client.post(
+            "/api/players", json={"full_name": f"Entropy One {tag}", "short_name": f"EO{tag}"}
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+        taken_id = first.json()["player_id"]
+        fresh_id = f"plr_{tag[:16]}"
+
+        with patch.object(app_module, "_generate_player_id", side_effect=[taken_id, fresh_id]):
+            second = self.client.post(
+                "/api/players",
+                json={"full_name": f"Entropy Two {tag}", "short_name": f"ET{tag}"},
+            )
+
+        self.assertEqual(second.status_code, 201, second.text)
+        self.assertEqual(
+            second.json()["player_id"],
+            fresh_id,
+            "collision with an existing id must regenerate instead of failing",
+        )
+
+
+class CompletedAtPersistenceTests(unittest.TestCase):
+    """L-07a.2: a session's completed_at is stamped once and never drifts.
+
+    completed_at was taken from record.updated_at on every stats sync, so
+    any later mutation - even a rename - reshuffled history ordering.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_completed_at_survives_later_mutations(self):
+        import time
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        session = create_round_robin_session(self.client, name=f"Stamp {tag}")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamA", "value": 21},
+        )
+        post_action(
+            self.client,
+            session,
+            "score",
+            {"stage": "league", "round_index": 0, "court_index": 0, "team_key": "teamB", "value": 15},
+        )
+        ended = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+
+        def history_entry():
+            history = self.client.get("/api/history/sessions")
+            self.assertEqual(history.status_code, 200, history.text)
+            return next(item for item in history.json() if item["session_id"] == session["session_id"])
+
+        first = history_entry()["completed_at"]
+
+        time.sleep(1.1)
+        renamed = self.client.post(
+            f"/api/sessions/{session['session_id']}/rename",
+            params={"edit_token": session["edit_token"]},
+            json={"name": f"Stamp Renamed {tag}"},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+
+        second = history_entry()["completed_at"]
+        self.assertEqual(
+            first,
+            second,
+            "completed_at must be stamped once; a rename must not shift it",
+        )
+
+
+class NfcNameNormalizationTests(unittest.TestCase):
+    """L-07a.3: composed and decomposed name forms are the same player.
+
+    Without NFC folding, 'José' stored as NFC and a second 'José' typed in
+    NFD (e + combining accent) created two different players.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_decomposed_form_conflicts_with_composed_form(self):
+        import unicodedata
+        import uuid
+
+        tag = uuid.uuid4().hex[:8]
+        composed = unicodedata.normalize("NFC", f"José {tag}")
+        decomposed = unicodedata.normalize("NFD", f"José {tag}")
+        self.assertNotEqual(composed, decomposed, "sanity: the two forms must differ as raw strings")
+
+        first = self.client.post(
+            "/api/players", json={"full_name": composed, "short_name": f"JZa{tag}"}
+        )
+        self.assertEqual(first.status_code, 201, first.text)
+
+        duplicate = self.client.post(
+            "/api/players", json={"full_name": decomposed, "short_name": f"JZb{tag}"}
+        )
+        self.assertEqual(
+            duplicate.status_code,
+            409,
+            f"decomposed form of the same name must conflict, got {duplicate.status_code}: {duplicate.text}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { matchPath, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, matchPath, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import AppShell from "./components/AppShell";
 import { appCopy } from "./content/uiCopy";
 import PlannerRoute from "./routes/PlannerRoute";
@@ -32,6 +32,23 @@ function RootRouteRedirect() {
   }
 
   return <Navigate to={ROUTE_PATHS.planner} replace />;
+}
+
+function NotFoundRoute() {
+  return (
+    <section className="mx-auto max-w-xl rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm">
+      <h1 className="text-2xl font-semibold text-gray-900">Page not found</h1>
+      <p className="mt-2 text-sm text-gray-600">
+        We could not find the page you were looking for. The link may be mistyped or out of date.
+      </p>
+      <Link
+        to={ROUTE_PATHS.planner}
+        className="mt-6 inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700"
+      >
+        Back to the planner
+      </Link>
+    </section>
+  );
 }
 
 function RenameSessionDialog({
@@ -210,6 +227,8 @@ export default function App() {
   });
 
   useEffect(() => {
+    // Intentional: reset transient UI state whenever the route changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMobileNavOpen(false);
     sessions.clearPageError();
     scoring.clearPageError();
@@ -411,6 +430,7 @@ export default function App() {
         />
         <Route path={ROUTE_PATHS.playerStats} element={<PlayerStatsRoute playerStats={playerStats} />} />
         <Route path={ROUTE_PATHS.scoring} element={<ScoringRoute scoring={scoringRoute} />} />
+        <Route path="*" element={<NotFoundRoute />} />
       </Routes>
 
       <RenameSessionDialog

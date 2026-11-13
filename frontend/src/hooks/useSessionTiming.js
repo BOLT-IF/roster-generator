@@ -9,22 +9,24 @@ export default function useSessionTiming({ loading, sessionLoading, sessionsLoad
 
   useEffect(() => {
     if (loading) {
-      setElapsed(0);
       timerRef.current = window.setInterval(() => setElapsed((seconds) => seconds + 1), 1000);
-    } else {
-      window.clearInterval(timerRef.current);
     }
-    return () => window.clearInterval(timerRef.current);
+    return () => {
+      window.clearInterval(timerRef.current);
+      // Reset on stop so the next loading period starts counting from zero.
+      setElapsed(0);
+    };
   }, [loading]);
 
   useEffect(() => {
     if (sessionLoading || sessionsLoading) {
-      setSessionElapsed(0);
       sessionTimerRef.current = window.setInterval(() => setSessionElapsed((seconds) => seconds + 1), 1000);
-    } else {
-      window.clearInterval(sessionTimerRef.current);
     }
-    return () => window.clearInterval(sessionTimerRef.current);
+    return () => {
+      window.clearInterval(sessionTimerRef.current);
+      // Reset on stop so the next loading period starts counting from zero.
+      setSessionElapsed(0);
+    };
   }, [sessionLoading, sessionsLoading]);
 
   function loadingText() {
