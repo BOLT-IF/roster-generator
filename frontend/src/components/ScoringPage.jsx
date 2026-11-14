@@ -395,7 +395,13 @@ function RoundList({
         const sourceIndex = round.sourceIndex ?? roundIndex;
         const roundScores = scoresByRound[sourceIndex] || createScoresForRounds([round])[0];
         const status = getRoundStatus(sourceIndex, activeRound, endedRounds);
-        const canStart = sourceIndex === activeRound + 1;
+        // The next round's Start stays disabled until the current round is
+        // ended - one live round at a time (the backend enforces the same
+        // rule; field bug 2026-11-14 showed starting early stranded the
+        // live round forever).
+        const canStart =
+          sourceIndex === activeRound + 1 &&
+          (activeRound < 0 || endedRounds[activeRound]);
         const isEnded = endedRounds[sourceIndex];
         const isLive = status === "live";
         const hasTiedMatch = roundScores.some(
