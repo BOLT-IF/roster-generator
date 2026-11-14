@@ -2824,6 +2824,16 @@ def start_round(session_id: str, req: RoundStartRequest, edit_token: str | None 
                 raise HTTPException(status_code=409, detail="Round must be started in sequence")
             if req.round_index >= len(payload.get("roster", {}).get("rounds", [])):
                 raise HTTPException(status_code=400, detail="Invalid round index")
+            # Field bug 2026-11-14: starting the next round while the current
+            # one was live stranded it forever - "only the active round can
+            # be ended" then made the live round unendable and the session
+            # could never complete. One live round at a time.
+            league_records, _ = _get_stage_progress(db, session_id, "league")
+            if any(item.started and not item.ended for item in league_records):
+                raise HTTPException(
+                    status_code=409,
+                    detail="End the current round before starting the next one",
+                )
             _capture_undo_snapshot(payload)
             round_record = _get_or_create_round_record(db, session_id, "league", req.round_index)
             round_record.started = True
@@ -2846,6 +2856,12 @@ def start_round(session_id: str, req: RoundStartRequest, edit_token: str | None 
         current_round = _get_stage_progress(db, session_id, "knockout")[1]
         if req.round_index != current_round + 1:
             raise HTTPException(status_code=409, detail="Round must be started in sequence")
+        knockout_records, _ = _get_stage_progress(db, session_id, "knockout")
+        if any(item.started and not item.ended for item in knockout_records):
+            raise HTTPException(
+                status_code=409,
+                detail="End the current round before starting the next one",
+            )
         _capture_undo_snapshot(payload)
         round_record = _get_or_create_round_record(db, session_id, "knockout", req.round_index)
         round_record.started = True

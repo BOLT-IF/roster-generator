@@ -397,5 +397,108 @@ class CompletedAtPersistenceTests(unittest.TestCase):
         )
 
 
+class LiveRoundStartGuardTests(unittest.TestCase):
+    """Field bug 2026-11-14: a new round could be started while the previous
+    one was still live, and the live round could then never be ended ("Only
+    the active round can be ended") - the session was stranded forever and
+    could never complete. Starting the next round must require the previous
+    round to be ended.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def _session(self, name):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            num_courts=1,
+            rounds=6,
+        )
+        return create_round_robin_session(self.client, name=name, roster=roster)
+
+    def test_league_round_cannot_start_while_previous_is_live(self):
+        session = self._session("Live Guard League")
+        post_action(self.client, session, "start-round", {"stage": "league", "round_index": 0})
+        # The bug: starting round 1 while round 0 is live stranded round 0.
+        blocked = post_action(
+            self.client, session, "start-round", {"stage": "league", "round_index": 1}
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertIn("End the current round", blocked.json()["detail"])
+        # The live round stays endable: score it and end it.
+        for team_key, value in (("teamA", 21), ("teamB", 15)):
+            post_action(
+                self.client,
+                session,
+                "score",
+                {"stage": "league", "round_index": 0, "court_index": 0, "team_key": team_key, "value": value},
+            )
+        ended = post_action(self.client, session, "end-round", {"stage": "league", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+        # Now the next round may start.
+        started = post_action(
+            self.client, session, "start-round", {"stage": "league", "round_index": 1}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+
+    def test_knockout_round_cannot_start_while_previous_is_live(self):
+        roster = generate_roster(
+            self.client,
+            players=["A", "B", "C", "D", "E", "F", "G", "H"],
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            num_courts=2,
+            rounds=3,
+            pair_games=1,
+        )
+        session = create_round_robin_session(
+            self.client,
+            name="Live Guard Knockout",
+            roster=roster,
+            draw_config={"draw_type": "league_knockout", "league_meetings": 1, "knockout_qualifiers": 4},
+            fixed_pairs=[["A", "B"], ["C", "D"], ["E", "F"], ["G", "H"]],
+            pair_games=1,
+        )
+        for round_index in range(3):
+            post_action(self.client, session, "start-round", {"stage": "league", "round_index": round_index})
+            for court_index in range(2):
+                for team_key, value in (("teamA", 21), ("teamB", 15)):
+                    post_action(
+                        self.client,
+                        session,
+                        "score",
+                        {"stage": "league", "round_index": round_index, "court_index": court_index, "team_key": team_key, "value": value},
+                    )
+            post_action(self.client, session, "end-round", {"stage": "league", "round_index": round_index})
+
+        post_action(self.client, session, "start-round", {"stage": "knockout", "round_index": 0})
+        blocked = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 1}
+        )
+        self.assertEqual(blocked.status_code, 409)
+        self.assertIn("End the current round", blocked.json()["detail"])
+        # The live semifinal stays endable, then the final may start.
+        for court_index in range(2):
+            for team_key, value in (("teamA", 21), ("teamB", 15)):
+                post_action(
+                    self.client,
+                    session,
+                    "score",
+                    {"stage": "knockout", "round_index": 0, "court_index": court_index, "team_key": team_key, "value": value},
+                )
+        ended = post_action(self.client, session, "end-round", {"stage": "knockout", "round_index": 0})
+        self.assertEqual(ended.status_code, 200, ended.text)
+        started = post_action(
+            self.client, session, "start-round", {"stage": "knockout", "round_index": 1}
+        )
+        self.assertEqual(started.status_code, 200, started.text)
+
+
 if __name__ == "__main__":
     unittest.main()
