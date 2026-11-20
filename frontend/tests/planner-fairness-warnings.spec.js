@@ -160,7 +160,7 @@ test("fairness is recomputed after a manual roster edit (AC-W4)", async ({ page,
 });
 
 test("generate spinner appears only after one second and never blocks review content (AC-PERF-2)", async ({ page, request }, testInfo) => {
-  const players = await addPlannerPlayers(page, request, testInfo.project.name, 12, "SPN");
+  await addPlannerPlayers(page, request, testInfo.project.name, 12, "SPN");
   await domClick(page.getByRole("button", { name: "Next: Settings" }));
   await domClick(page.getByRole("button", { name: "Increase Courts" }));
   await domClick(page.getByRole("button", { name: "Next: Review" }));

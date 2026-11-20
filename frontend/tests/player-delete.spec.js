@@ -58,7 +58,7 @@ test("deleting a player from the directory keeps historical stats unless request
   await directoryCard.scrollIntoViewIfNeeded();
   await directoryCard.getByRole("button", { name: "Delete", exact: true }).click();
 
-  const deleteDialog = page.locator("div.fixed.inset-0").filter({ hasText: "This action is intentionally strict" });
+  const deleteDialog = page.getByRole("dialog").filter({ hasText: "This action is intentionally strict" });
   await expect(deleteDialog.getByText("This action is intentionally strict")).toBeVisible();
   await expect(deleteDialog.getByText("Also delete historical player records")).toBeVisible();
   await deleteDialog.getByLabel("Admin token").fill("thisismytoken");
@@ -136,7 +136,7 @@ test("recreating a deleted player restores the same player name cleanly", async 
   const refreshedDirectorySection = page.locator("section").filter({ has: page.getByRole("heading", { name: "Registered players" }) });
   const refreshedDirectoryCard = refreshedDirectorySection.locator("div.rounded-2xl.border.border-gray-200.bg-gray-50").filter({ hasText: fullName }).first();
   await refreshedDirectoryCard.getByRole("button", { name: "Delete", exact: true }).click();
-  const deleteDialog = page.locator("div.fixed.inset-0").filter({ hasText: "This action is intentionally strict" });
+  const deleteDialog = page.getByRole("dialog").filter({ hasText: "This action is intentionally strict" });
   await deleteDialog.getByLabel("Admin token").fill("thisismytoken");
   await deleteDialog.getByRole("button", { name: "Delete Player" }).click();
   await expect(refreshedDirectoryCard).toHaveCount(0);

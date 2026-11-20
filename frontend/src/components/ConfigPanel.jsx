@@ -14,20 +14,57 @@ const DRAW_FORMATS = [
   },
 ];
 
+// Toggletip for per-field guidance: opens on hover, keyboard focus, and tap
+// (click), and is dismissible with Escape (WCAG 1.4.13). Kept as a lightweight
+// control because popover="hint" + interestfor still needs a polyfill for
+// several current browsers.
+function FieldHint({ hint }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <span
+      className="relative inline-flex"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        aria-label="More information"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        className="inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center text-gray-400 transition-colors hover:text-indigo-500"
+      >
+        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
+      <span
+        role="tooltip"
+        className={`absolute bottom-full left-1/2 z-20 -translate-x-1/2 whitespace-nowrap rounded-md bg-gray-800 px-2.5 py-1.5 text-xs text-white shadow-lg transition-opacity ${
+          open ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+      >
+        {hint}
+      </span>
+    </span>
+  );
+}
+
 function NumericField({ fieldKey, label, min, max, hint, value, onAdjust, onDraftChange, onCommit }) {
   return (
     <div>
-      <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">
-        {label}
-        <span className="relative group">
-          <svg className="w-3.5 h-3.5 text-gray-400 hover:text-indigo-500 transition-colors cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 text-xs text-white bg-gray-800 rounded-md shadow-lg whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-20">
-            {hint}
-          </span>
-        </span>
-      </label>
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-600">
+        <label htmlFor={`${fieldKey}-field`}>{label}</label>
+        <FieldHint hint={hint} />
+      </div>
       <div className="flex items-stretch gap-2">
         <button
           type="button"
@@ -38,6 +75,7 @@ function NumericField({ fieldKey, label, min, max, hint, value, onAdjust, onDraf
           -
         </button>
         <input
+          id={`${fieldKey}-field`}
           type="number"
           min={min}
           max={max}
@@ -485,18 +523,12 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
               />
             ))}
             <div>
-              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1">
-                Seed
-                <span className="relative group">
-                  <svg className="w-3.5 h-3.5 text-gray-400 hover:text-indigo-500 transition-colors cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 text-xs text-white bg-gray-800 rounded-md shadow-lg whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-20">
-                    Same seed = same roster. Leave empty for random.
-                  </span>
-                </span>
-              </label>
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-gray-600">
+                <label htmlFor="seed-field">Seed</label>
+                <FieldHint hint="Same seed = same roster. Leave empty for random." />
+              </div>
               <input
+                id="seed-field"
                 type="number"
                 value={seedDraft}
                 onChange={(e) => setSeedDraft(e.target.value)}
@@ -571,7 +603,11 @@ export default function ConfigPanel({ config, setConfig, players, fixedPairs }) 
                     className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-orange-50 border border-orange-200 text-orange-700"
                   >
                     {player}: max {limit}
-                    <button onClick={() => removeLimit(player)} className="hover:text-red-600 ml-0.5">
+                    <button
+                      onClick={() => removeLimit(player)}
+                      aria-label={`Remove limit for ${player}`}
+                      className="ml-0.5 hover:text-red-600"
+                    >
                       &times;
                     </button>
                   </span>

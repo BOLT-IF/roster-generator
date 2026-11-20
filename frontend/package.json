@@ -11,7 +11,8 @@
     "test:e2e": "playwright test --project=desktop",
     "test:e2e:smoke": "playwright test --project=desktop --grep @smoke",
     "test:e2e:full": "playwright test --project=desktop",
-    "test:e2e:mobile": "playwright test --project=iphone --project=android",
+    "test:e2e:mobile": "playwright test --project=iphone --project=android --project=android-firefox",
+    "test:e2e:cross-browser": "playwright test --project=desktop --project=iphone --project=android --project=android-firefox",
     "test:e2e:staging": "PLAYWRIGHT_REMOTE=1 PLAYWRIGHT_BASE_URL=https://roster-generator-oibn.onrender.com PLAYWRIGHT_API_BASE_URL=https://roster-generator-oibn.onrender.com playwright test --project=desktop",
     "test:e2e:staging:smoke": "PLAYWRIGHT_REMOTE=1 PLAYWRIGHT_BASE_URL=https://roster-generator-oibn.onrender.com PLAYWRIGHT_API_BASE_URL=https://roster-generator-oibn.onrender.com playwright test --project=desktop --grep @smoke",
     "test:e2e:staging:mobile": "PLAYWRIGHT_REMOTE=1 PLAYWRIGHT_BASE_URL=https://roster-generator-oibn.onrender.com PLAYWRIGHT_API_BASE_URL=https://roster-generator-oibn.onrender.com playwright test --project=iphone --project=android"

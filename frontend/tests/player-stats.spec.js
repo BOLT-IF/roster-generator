@@ -23,7 +23,7 @@ test("player stats page shows completed-session analytics", async ({ page, reque
 });
 
 test("mobile player stats keeps leaderboard visible until a player is selected", async ({ page, request }, testInfo) => {
-  test.skip(!["iphone", "android"].includes(testInfo.project.name), "Mobile-only regression test");
+  test.skip(!["iphone", "android", "android-firefox"].includes(testInfo.project.name), "Mobile-only regression test");
 
   await completeRoundRobinSession(request, "Mobile Player Stats");
 

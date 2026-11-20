@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import ModalDialog from "./ModalDialog";
 import { playersPageCopy } from "../content/uiCopy";
 
 function PlayersIcon({ kind, className = "h-5 w-5" }) {
@@ -131,18 +132,22 @@ function PlayerEditor({ title, submitLabel, draft, setDraft, loading, error, onS
 }
 
 function EditPlayerDialog({ player, open, loading, error, draft, setDraft, onCancel, onConfirm }) {
-  if (!open || !player) return null;
+  const headingId = useId();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-cyan-200 bg-white p-5 shadow-xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-cyan-600">{playersPageCopy.editPlayer.eyebrow}</p>
-        <h3 className="mt-1 text-xl font-semibold text-gray-900">{playersPageCopy.editPlayer.title}</h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {playersPageCopy.editPlayer.description}
-        </p>
+    <ModalDialog
+      open={Boolean(open && player)}
+      onClose={onCancel}
+      labelledBy={headingId}
+      className="max-w-lg border-cyan-200"
+    >
+      <p className="text-sm font-semibold uppercase tracking-wide text-cyan-600">{playersPageCopy.editPlayer.eyebrow}</p>
+      <h3 id={headingId} className="mt-1 text-xl font-semibold text-gray-900">{playersPageCopy.editPlayer.title}</h3>
+      <p className="mt-2 text-sm text-gray-600">
+        {playersPageCopy.editPlayer.description}
+      </p>
 
-        <form
+      <form
           className="mt-5 space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
@@ -176,8 +181,7 @@ function EditPlayerDialog({ player, open, loading, error, draft, setDraft, onCan
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </ModalDialog>
   );
 }
 
@@ -191,14 +195,21 @@ function DeletePlayerDialog({
   onCancel,
   onConfirm,
 }) {
-  if (!open || !player) return null;
+  const headingId = useId();
+  const dialogOpen = Boolean(open && player);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-rose-200 bg-white p-5 shadow-xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-rose-600">{playersPageCopy.deletePlayer.eyebrow}</p>
-        <h3 className="mt-1 text-xl font-semibold text-gray-900">{playersPageCopy.deletePlayer.title}</h3>
-        <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+    <ModalDialog
+      open={dialogOpen}
+      onClose={onCancel}
+      labelledBy={headingId}
+      className="max-w-lg border-rose-200"
+    >
+      {dialogOpen && player ? (
+        <>
+          <p className="text-sm font-semibold uppercase tracking-wide text-rose-600">{playersPageCopy.deletePlayer.eyebrow}</p>
+          <h3 id={headingId} className="mt-1 text-xl font-semibold text-gray-900">{playersPageCopy.deletePlayer.title}</h3>
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           <p className="font-semibold">
             {playersPageCopy.deletePlayer.descriptionLead} <span className="font-bold">{player.full_name}</span> {playersPageCopy.deletePlayer.descriptionMiddle}
           </p>
@@ -260,8 +271,9 @@ function DeletePlayerDialog({
             {loading ? playersPageCopy.deletePlayer.submitLoading : playersPageCopy.deletePlayer.submit}
           </button>
         </div>
-      </div>
-    </div>
+        </>
+      ) : null}
+    </ModalDialog>
   );
 }
 

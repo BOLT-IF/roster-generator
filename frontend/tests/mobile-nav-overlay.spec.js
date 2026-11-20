@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { completeRoundRobinSession, openSession } from "./helpers/session";
 
 test("mobile navigation overlays scoring panel tabs", async ({ page, request }, testInfo) => {
-  test.skip(!["iphone", "android"].includes(testInfo.project.name), "Mobile-only regression test");
+  test.skip(!["iphone", "android", "android-firefox"].includes(testInfo.project.name), "Mobile-only regression test");
 
   const session = await completeRoundRobinSession(request, "Mobile Nav Overlay");
 
@@ -13,7 +13,7 @@ test("mobile navigation overlays scoring panel tabs", async ({ page, request }, 
 
   const nav = page.locator("#mobile-global-nav");
   const navButton = nav.getByRole("button", { name: "Planner" });
-  const resultsTab = page.getByRole("button", { name: "Results" });
+  const resultsTab = page.getByRole("tab", { name: "Results" });
 
   await expect(nav).toBeVisible();
   await expect(navButton).toBeVisible();

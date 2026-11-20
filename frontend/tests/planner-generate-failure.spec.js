@@ -15,8 +15,8 @@ test("a failed regenerate keeps the previous roster and manual edits and shows t
   await page.route("**/api/generate", (route) =>
     route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "Generator exploded" }) })
   );
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Regenerate Roster" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
 
   // The error is surfaced...
   await expect(page.getByText("Roster could not be generated")).toBeVisible();

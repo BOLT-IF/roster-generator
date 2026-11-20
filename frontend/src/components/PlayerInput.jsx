@@ -253,12 +253,21 @@ export default function PlayerInput({
                 return (
                   <div
                     key={player.playerId}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={isFirstSelected}
                     className={`rounded-2xl border p-4 shadow-sm transition-colors cursor-pointer ${
                       isFirstSelected
                         ? "border-indigo-300 bg-indigo-100 ring-2 ring-indigo-200"
                         : pairColor || "border-gray-200 bg-white hover:bg-gray-50"
                     }`}
                     onClick={() => togglePair(player.playerId)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        togglePair(player.playerId);
+                      }
+                    }}
                   >
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">

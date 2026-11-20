@@ -6,3 +6,4 @@ __pycache__/
 .env
 frontend/test-results/
 frontend/playwright-report/
+.agents/skills/modern-web-guidance/

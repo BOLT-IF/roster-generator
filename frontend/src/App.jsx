@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Link, matchPath, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import AppShell from "./components/AppShell";
+import ModalDialog from "./components/ModalDialog";
 import { appCopy } from "./content/uiCopy";
 import PlannerRoute from "./routes/PlannerRoute";
 import PlayersRoute from "./routes/PlayersRoute";
@@ -60,57 +61,55 @@ function RenameSessionDialog({
   onCancel,
   onSubmit,
 }) {
-  if (!open) return null;
+  const headingId = useId();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-      <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-5 shadow-xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-gray-500">{appCopy.renameDialog.eyebrow}</p>
-        <h3 className="mt-1 text-lg font-semibold text-gray-900">{appCopy.renameDialog.title}</h3>
-        <form
-          className="mt-4 space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit();
-          }}
-        >
-          {error ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {error}
-            </div>
-          ) : null}
-          <label className="block text-sm font-medium text-gray-700" htmlFor="rename-session-name">
-            {appCopy.renameDialog.fieldLabel}
-            <input
-              id="rename-session-name"
-              type="text"
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              disabled={loading}
-              maxLength={120}
-              className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-gray-100"
-            />
-          </label>
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={loading}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
-            >
-              {appCopy.renameDialog.cancel}
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !value.trim()}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
-            >
-              {loading ? appCopy.renameDialog.submitLoading : appCopy.renameDialog.submit}
-            </button>
+    <ModalDialog open={open} onClose={onCancel} labelledBy={headingId} className="max-w-md">
+      <p className="text-sm font-semibold uppercase tracking-wide text-gray-500">{appCopy.renameDialog.eyebrow}</p>
+      <h3 id={headingId} className="mt-1 text-lg font-semibold text-gray-900">{appCopy.renameDialog.title}</h3>
+      <form
+        className="mt-4 space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        {error ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error}
           </div>
-        </form>
-      </div>
-    </div>
+        ) : null}
+        <label className="block text-sm font-medium text-gray-700" htmlFor="rename-session-name">
+          {appCopy.renameDialog.fieldLabel}
+          <input
+            id="rename-session-name"
+            type="text"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            disabled={loading}
+            maxLength={120}
+            className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-gray-100"
+          />
+        </label>
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+          >
+            {appCopy.renameDialog.cancel}
+          </button>
+          <button
+            type="submit"
+            disabled={loading || !value.trim()}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
+          >
+            {loading ? appCopy.renameDialog.submitLoading : appCopy.renameDialog.submit}
+          </button>
+        </div>
+      </form>
+    </ModalDialog>
   );
 }
 
@@ -123,60 +122,95 @@ function OrganizerTokenDialog({
   onCancel,
   onSubmit,
 }) {
-  if (!open) return null;
+  const headingId = useId();
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-      <div className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-5 shadow-xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">{appCopy.organizerDialog.eyebrow}</p>
-        <h3 className="mt-1 text-lg font-semibold text-gray-900">{appCopy.organizerDialog.title}</h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {appCopy.organizerDialog.description}
-        </p>
-        <form
-          className="mt-4 space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit();
-          }}
-        >
-          <label className="block text-sm font-medium text-gray-700" htmlFor="organizer-token">
-            {appCopy.organizerDialog.fieldLabel}
-            <input
-              id="organizer-token"
-              type="password"
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              disabled={loading}
-              placeholder={appCopy.organizerDialog.fieldPlaceholder}
-              className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-gray-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 disabled:bg-gray-100"
-            />
-          </label>
-          {error ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {error}
-            </div>
-          ) : null}
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={loading}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
-            >
-              {appCopy.organizerDialog.cancel}
-            </button>
-            <button
-              type="submit"
-              disabled={loading || !value.trim()}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
-            >
-              {loading ? appCopy.organizerDialog.submitLoading : appCopy.organizerDialog.submit}
-            </button>
+    <ModalDialog open={open} onClose={onCancel} labelledBy={headingId} className="max-w-md border-amber-200">
+      <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">{appCopy.organizerDialog.eyebrow}</p>
+      <h3 id={headingId} className="mt-1 text-lg font-semibold text-gray-900">{appCopy.organizerDialog.title}</h3>
+      <p className="mt-2 text-sm text-gray-600">
+        {appCopy.organizerDialog.description}
+      </p>
+      <form
+        className="mt-4 space-y-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <label className="block text-sm font-medium text-gray-700" htmlFor="organizer-token">
+          {appCopy.organizerDialog.fieldLabel}
+          <input
+            id="organizer-token"
+            type="password"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            disabled={loading}
+            placeholder={appCopy.organizerDialog.fieldPlaceholder}
+            className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-gray-900 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 disabled:bg-gray-100"
+          />
+        </label>
+        {error ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            {error}
           </div>
-        </form>
+        ) : null}
+        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+          >
+            {appCopy.organizerDialog.cancel}
+          </button>
+          <button
+            type="submit"
+            disabled={loading || !value.trim()}
+            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
+          >
+            {loading ? appCopy.organizerDialog.submitLoading : appCopy.organizerDialog.submit}
+          </button>
+        </div>
+      </form>
+    </ModalDialog>
+  );
+}
+
+// Replaces window.confirm: a native <dialog> confirmation. Focus lands on the
+// first focusable control (the safe Cancel action), Esc closes it, and the
+// background page is made inert by showModal() instead of being blocked by a
+// synchronous native prompt.
+function ConfirmDialog({ request, onAnswer }) {
+  const headingId = useId();
+
+  return (
+    <ModalDialog
+      open={Boolean(request)}
+      onClose={() => onAnswer(false)}
+      labelledBy={headingId}
+      className="max-w-md"
+    >
+      <p className="text-sm font-semibold uppercase tracking-wide text-rose-600">Confirmation</p>
+      <h3 id={headingId} className="mt-1 text-lg font-semibold text-gray-900">Are you sure?</h3>
+      {request ? <p className="mt-2 text-sm text-gray-600">{request.message}</p> : null}
+      <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={() => onAnswer(false)}
+          className="inline-flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => onAnswer(true)}
+          className="inline-flex min-h-11 items-center justify-center rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-rose-700"
+        >
+          {request?.confirmLabel || "Confirm"}
+        </button>
       </div>
-    </div>
+    </ModalDialog>
   );
 }
 
@@ -184,6 +218,24 @@ export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Promise-based confirmation backed by the ConfirmDialog above; hooks await
+  // it wherever they used to call window.confirm.
+  const confirmResolverRef = useRef(null);
+  const [confirmRequest, setConfirmRequest] = useState(null);
+
+  function confirmAction(message, { confirmLabel } = {}) {
+    return new Promise((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmRequest({ message, confirmLabel });
+    });
+  }
+
+  function answerConfirm(accepted) {
+    confirmResolverRef.current?.(accepted);
+    confirmResolverRef.current = null;
+    setConfirmRequest(null);
+  }
 
   const view = getViewFromPathname(location.pathname);
   const scoringRouteMatch = matchPath({ path: ROUTE_PATHS.scoring, end: true }, location.pathname);
@@ -196,16 +248,19 @@ export default function App() {
     refreshPlayerStats: playerStats.loadPlayerStats,
   });
   const planner = usePlannerState({
+    confirmAction,
     directoryPlayers: players.directoryPlayers,
     directoryLoaded: players.directoryLoaded,
     navigateToPlanner: () => navigate(ROUTE_PATHS.planner),
   });
   const sessions = useSessionsData({
+    confirmAction,
     navigate,
     refreshPlayerStats: playerStats.loadPlayerStats,
     view,
   });
   const scoring = useScoringSession({
+    confirmAction,
     location,
     navigate,
     routeEditToken,
@@ -432,6 +487,8 @@ export default function App() {
         <Route path={ROUTE_PATHS.scoring} element={<ScoringRoute scoring={scoringRoute} />} />
         <Route path="*" element={<NotFoundRoute />} />
       </Routes>
+
+      <ConfirmDialog request={confirmRequest} onAnswer={answerConfirm} />
 
       <RenameSessionDialog
         open={sessions.renameDialog.open}

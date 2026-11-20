@@ -72,7 +72,7 @@ test("players can be created, selected from the planner directory, and used to s
   await expect(page.locator("main")).toContainText(`PA1${suffix}`);
 
   await page.getByRole("button", { name: "Start Session" }).click();
-  const organizerDialog = page.locator("div.fixed.inset-0").filter({ hasText: "Enter organizer token to start a session" });
+  const organizerDialog = page.getByRole("dialog").filter({ hasText: "Enter organizer token to start a session" });
   await expect(organizerDialog.getByRole("heading", { name: "Enter organizer token to start a session" })).toBeVisible();
   await organizerDialog.getByLabel("Organizer token").fill("thisismytoken");
   await organizerDialog.getByRole("button", { name: "Start Session" }).click();

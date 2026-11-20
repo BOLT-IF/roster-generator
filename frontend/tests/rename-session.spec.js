@@ -10,7 +10,7 @@ test("@smoke session can be renamed from scoring view and session list", async (
   await expect(page.getByRole("button", { name: "Rename Session", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Rename Session", exact: true }).click();
-  await page.getByLabel("Session name").fill(`Evening Ladder ${suffix}`);
+  await page.getByLabel("Session name", { exact: true }).fill(`Evening Ladder ${suffix}`);
   await page.getByRole("button", { name: "Save Name" }).click();
   await expect(page.getByText(`Session Evening Ladder ${suffix}`)).toBeVisible();
 
@@ -20,7 +20,7 @@ test("@smoke session can be renamed from scoring view and session list", async (
 
   const activeSessionCard = page.locator("div.rounded-2xl").filter({ hasText: `Evening Ladder ${suffix}` }).first();
   await activeSessionCard.getByRole("button", { name: "Rename" }).click();
-  await page.getByLabel("Session name").fill(`Thursday Club ${suffix}`);
+  await page.getByLabel("Session name", { exact: true }).fill(`Thursday Club ${suffix}`);
   await page.getByRole("button", { name: "Save Name" }).click();
   await expect(page.getByRole("heading", { name: `Thursday Club ${suffix}` }).first()).toBeVisible();
 
