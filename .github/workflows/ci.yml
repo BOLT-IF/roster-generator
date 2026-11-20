@@ -30,7 +30,9 @@ jobs:
 
   e2e-tests:
     name: e2e-tests
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.59 does not
+    # support (install --with-deps fails), so browsers can't be installed.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: frontend
@@ -69,7 +71,7 @@ jobs:
           key: playwright-browsers-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium webkit
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: Create backend venv expected by playwright.config.js
         working-directory: backend
