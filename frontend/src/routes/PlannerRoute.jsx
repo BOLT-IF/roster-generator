@@ -1,42 +1,48 @@
+import { useId } from "react";
 import PlayerInput from "../components/PlayerInput";
 import ConfigPanel from "../components/ConfigPanel";
 import RosterTable from "../components/RosterTable";
 import DownloadCSV from "../components/DownloadCSV";
+import ModalDialog from "../components/ModalDialog";
 import { appCopy } from "../content/uiCopy";
 
 function KnockoutDuplicateDialog({ violations, onDismiss }) {
-  if (!violations || violations.length === 0) return null;
+  const headingId = useId();
+  const open = Boolean(violations && violations.length > 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
-      <div className="w-full max-w-2xl rounded-2xl border border-amber-200 bg-white p-5 shadow-xl">
-        <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">
-          {appCopy.planner.duplicateDialog.eyebrow}
-        </p>
-        <h3 className="mt-1 text-lg font-semibold text-gray-900">
-          {appCopy.planner.duplicateDialog.title}
-        </h3>
-        <p className="mt-2 text-sm text-gray-600">
-          {appCopy.planner.duplicateDialog.description}
-        </p>
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          {violations.map((violation, index) => (
-            <p key={index} className="text-sm text-amber-800">
-              {violation}
-            </p>
-          ))}
-        </div>
-        <div className="mt-4 flex justify-end">
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="inline-flex min-h-11 items-center justify-center rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
-          >
-            {appCopy.planner.duplicateDialog.dismiss}
-          </button>
-        </div>
+    <ModalDialog
+      open={open}
+      onClose={onDismiss}
+      labelledBy={headingId}
+      className="max-w-2xl border-amber-200"
+    >
+      <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">
+        {appCopy.planner.duplicateDialog.eyebrow}
+      </p>
+      <h3 id={headingId} className="mt-1 text-lg font-semibold text-gray-900">
+        {appCopy.planner.duplicateDialog.title}
+      </h3>
+      <p className="mt-2 text-sm text-gray-600">
+        {appCopy.planner.duplicateDialog.description}
+      </p>
+      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        {violations?.map((violation, index) => (
+          <p key={index} className="text-sm text-amber-800">
+            {violation}
+          </p>
+        ))}
       </div>
-    </div>
+      <div className="mt-4 flex justify-end">
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="inline-flex min-h-11 items-center justify-center rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
+        >
+          {appCopy.planner.duplicateDialog.dismiss}
+        </button>
+      </div>
+    </ModalDialog>
   );
 }
 

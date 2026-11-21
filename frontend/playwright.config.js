@@ -46,5 +46,18 @@ export default defineConfig({
         ...devices["Pixel 7"],
       },
     },
+    {
+      // Mobile-viewport Firefox: Playwright's Firefox build does not support
+      // `isMobile`, so this emulates a phone via viewport + touch only. It is
+      // the closest automation available for Firefox-on-mobile; real-device
+      // Firefox still needs manual checks.
+      name: "android-firefox",
+      use: {
+        browserName: "firefox",
+        viewport: { width: 412, height: 915 },
+        deviceScaleFactor: 2.625,
+        hasTouch: true,
+      },
+    },
   ],
 });

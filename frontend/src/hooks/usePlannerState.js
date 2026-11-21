@@ -19,7 +19,7 @@ import {
   writeStorage,
 } from "./appStateUtils";
 
-export default function usePlannerState({ directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
+export default function usePlannerState({ confirmAction, directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
   const plannerState = useRef(sanitizePlannerState(readStorage(PLANNER_STORAGE_KEY, null))).current;
   const reviewStepRef = useRef(null);
 
@@ -186,8 +186,8 @@ export default function usePlannerState({ directoryPlayers, directoryLoaded = tr
   }, [directoryLoaded, directoryPlayers, selectedPlayerIds]);
 
   async function handleGenerate() {
-    if (hasManualRosterEdits && typeof window !== "undefined") {
-      const shouldContinue = window.confirm(appCopy.planner.regenerateConfirm);
+    if (hasManualRosterEdits) {
+      const shouldContinue = await confirmAction(appCopy.planner.regenerateConfirm);
       if (!shouldContinue) return;
     }
 

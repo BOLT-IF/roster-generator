@@ -21,6 +21,7 @@ import {
 } from "./appStateUtils";
 
 export default function useSessionsData({
+  confirmAction,
   navigate,
   refreshPlayerStats,
   view,
@@ -185,8 +186,9 @@ export default function useSessionsData({
   async function handleDeleteSession(sessionId, currentSession) {
     if (!sessionId) return;
     const target = sessions.find((session) => session.sessionId === sessionId);
-    const shouldDelete = window.confirm(
-      `Delete ${target?.name || "this session"}? This removes the locked roster and all saved scores.`
+    const shouldDelete = await confirmAction(
+      `Delete ${target?.name || "this session"}? This removes the locked roster and all saved scores.`,
+      { confirmLabel: "Delete Session" }
     );
     if (!shouldDelete) return;
 

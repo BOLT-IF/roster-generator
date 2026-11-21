@@ -23,6 +23,7 @@ import {
 } from "./appStateUtils";
 
 export default function useScoringSession({
+  confirmAction,
   location,
   navigate,
   routeEditToken,
@@ -282,8 +283,9 @@ export default function useScoringSession({
           round.some((score) => score.teamA !== "" || score.teamB !== "")
         );
       if (knockoutStarted) {
-        const accepted = window.confirm(
-          "Re-opening a league round deletes all knockout scores and results for this session. Continue?"
+        const accepted = await confirmAction(
+          "Re-opening a league round deletes all knockout scores and results for this session. Continue?",
+          { confirmLabel: "Re-open Round" }
         );
         if (!accepted) return;
         confirmKnockoutWipe = true;
@@ -458,7 +460,9 @@ export default function useScoringSession({
       teamKey,
       rawValue
     ).catch((error) => {
-      console.error("Score update failed:", error);
+      // Log the message explicitly: Firefox's console collapses a raw Error
+      // argument to "Error", losing the reason.
+      console.error("Score update failed:", error.message);
     });
   }
 

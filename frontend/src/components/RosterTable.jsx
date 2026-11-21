@@ -92,7 +92,7 @@ export default function RosterTable({
   const fixedPairSet = new Set(fixedPairs.map(([a, b]) => [a, b].sort().join("|")));
 
   function isFixedPairTeam(team) {
-    return team.length === 2 && fixedPairSet.has([...team].sort().join("|"));
+    return team.length === 2 && fixedPairSet.has(team.toSorted().join("|"));
   }
 
   function isSelectedPlayer(slot) {

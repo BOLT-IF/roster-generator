@@ -11,11 +11,11 @@ test("deleting a completed session removes it from history but keeps player stat
   await page.goto(`/?session=${sessionId}&edit=${editToken}`);
   await page.getByRole("button", { name: "Back to Roster" }).click();
 
-  page.once("dialog", (dialog) => dialog.accept());
   await navigateToSection(page, "History");
   const historyCard = page.locator("div.rounded-2xl").filter({ hasText: sessionName }).first();
   await expect(historyCard.getByText(sessionName)).toBeVisible();
   await historyCard.getByRole("button", { name: "Delete", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete Session" }).click();
   await expect(page.getByText(sessionName)).toHaveCount(0);
 
   await navigateToSection(page, "Player Stats");

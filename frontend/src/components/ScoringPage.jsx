@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { formatSessionPill, scoringCopy } from "../content/uiCopy";
 import {
@@ -561,7 +561,7 @@ function RoundList({
   );
 }
 
-function PanelTabs({ activePanel, onChange, hasBracket, showSummary }) {
+function PanelTabs({ activePanel, onChange, hasBracket, showSummary, idPrefix }) {
   const tabs = [
     ...(showSummary ? [{ id: "summary", label: "Results" }] : []),
     { id: "matches", label: "Matches" },
@@ -571,20 +571,32 @@ function PanelTabs({ activePanel, onChange, hasBracket, showSummary }) {
 
   return (
     <div className="sticky top-[6.5rem] z-20 -mx-1 rounded-2xl border border-gray-200 bg-white/95 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/80 md:static md:mx-0 md:bg-white md:p-2 md:backdrop-blur-0">
-      <div className="grid grid-cols-2 gap-2 sm:grid-flow-col sm:auto-cols-fr">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => onChange(tab.id)}
-            className={`rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${
-              activePanel === tab.id
-                ? "bg-indigo-600 text-white"
-                : "bg-gray-50 text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div
+        role="tablist"
+        aria-label="Scoring panels"
+        focusgroup="tablist"
+        className="grid grid-cols-2 gap-2 sm:grid-flow-col sm:auto-cols-fr"
+      >
+        {tabs.map((tab) => {
+          const selected = activePanel === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`${idPrefix}-${tab.id}`}
+              aria-selected={selected}
+              onClick={() => onChange(tab.id)}
+              className={`relative rounded-xl px-4 py-3 text-sm font-semibold transition-colors after:rounded-full after:content-[''] ${
+                selected
+                  ? "bg-indigo-600 text-white after:absolute after:inset-x-4 after:bottom-1.5 after:h-1 after:bg-white"
+                  : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -672,6 +684,7 @@ export default function ScoringPage({
       ? getMatchWinner(finalScore, finalRound.courts[0])
       : null;
   const [activePanel, setActivePanel] = useState(() => (sessionFinished ? "summary" : "matches"));
+  const panelTabId = useId();
   const summaryActivationRef = useRef(sessionFinished ? `${sessionName}:${completedRounds}:${totalRounds}` : "");
 
   useEffect(() => {
@@ -781,22 +794,25 @@ export default function ScoringPage({
         onChange={setActivePanel}
         hasBracket={hasBracket}
         showSummary={sessionFinished}
+        idPrefix={panelTabId}
       />
 
       {activePanel === "summary" && sessionFinished ? (
-        <TournamentSummary
-          drawConfig={drawConfig}
-          sessionName={sessionName}
-          totalRounds={totalRounds}
-          completedRounds={completedRounds}
-          champion={champion}
-          pairStandings={pairStandings}
-          individualStandings={individualStandings}
-        />
+        <div role="tabpanel" aria-labelledby={`${panelTabId}-summary`}>
+          <TournamentSummary
+            drawConfig={drawConfig}
+            sessionName={sessionName}
+            totalRounds={totalRounds}
+            completedRounds={completedRounds}
+            champion={champion}
+            pairStandings={pairStandings}
+            individualStandings={individualStandings}
+          />
+        </div>
       ) : null}
 
       {activePanel === "matches" ? (
-        <div className="space-y-6">
+        <div role="tabpanel" aria-labelledby={`${panelTabId}-matches`} className="space-y-6">
           <div className="space-y-5">
             <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 shadow-sm">
               <p className="text-sm font-semibold uppercase tracking-wide text-indigo-700">Current Focus</p>
@@ -938,7 +954,7 @@ export default function ScoringPage({
       ) : null}
 
       {activePanel === "bracket" && hasBracket ? (
-        <div className="space-y-5">
+        <div role="tabpanel" aria-labelledby={`${panelTabId}-bracket`} className="space-y-5">
           {knockoutRounds.length > 0 ? (
             <LiveBracket
               rounds={knockoutRounds}
@@ -959,7 +975,7 @@ export default function ScoringPage({
       ) : null}
 
       {activePanel === "rankings" ? (
-        <div className="space-y-6">
+        <div role="tabpanel" aria-labelledby={`${panelTabId}-rankings`} className="space-y-6">
           <CollapsibleSection
             title="League Pair Rankings"
             description="Based on completed league rounds only. Playoff matches do not change this table."

@@ -111,8 +111,8 @@ test("planner uses selection-first player, team, and round swaps", async ({ page
     const firstRoundAfterRoundSwap = await getMobileRoundSnapshot(page.locator("details").nth(0));
     expect(firstRoundAfterRoundSwap).not.toEqual(firstRoundBeforeRoundSwap);
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Regenerate Roster" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
     await expect(page.getByText("Edited roster")).toHaveCount(0);
     return;
   }
@@ -152,7 +152,7 @@ test("planner uses selection-first player, team, and round swaps", async ({ page
   const firstRowAfterRoundSwap = await getRoundSnapshot(page.locator("table tbody tr").nth(0));
   expect(firstRowAfterRoundSwap.rowBody).not.toEqual(firstRowBeforeRoundSwap.rowBody);
 
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Regenerate Roster" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Confirm" }).click();
   await expect(page.getByText("Edited roster")).toHaveCount(0);
 });
