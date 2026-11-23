@@ -252,6 +252,7 @@ export default function App() {
     directoryPlayers: players.directoryPlayers,
     directoryLoaded: players.directoryLoaded,
     navigateToPlanner: () => navigate(ROUTE_PATHS.planner),
+    onCreatePlayer: players.handleCreatePlayer,
   });
   const sessions = useSessionsData({
     confirmAction,
