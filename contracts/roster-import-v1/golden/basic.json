@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "source": "bolt-club-hq",
+  "event": {
+    "title": "Thu Mixed Doubles",
+    "starts_at": "2027-01-14T18:00:00Z",
+    "format": "XD"
+  },
+  "players": [
+    { "name": "Elin Varga", "short": "Elin", "guest": false },
+    { "name": "Marko Hale", "short": "Marko", "guest": false },
+    { "name": "Tove Sandqvist", "short": "Tove", "guest": false }
+  ]
+}
