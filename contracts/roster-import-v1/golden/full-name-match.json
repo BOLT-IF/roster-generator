@@ -1,0 +1,11 @@
+{
+  "v": 1,
+  "source": "bolt-club-hq",
+  "event": {
+    "title": "Full Name Match",
+    "starts_at": "2027-01-15T18:00:00Z"
+  },
+  "players": [
+    { "name": "Tove Sandqvist", "short": "Sandy", "guest": false }
+  ]
+}

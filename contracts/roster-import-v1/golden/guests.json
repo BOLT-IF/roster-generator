@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "source": "bolt-club-hq",
+  "event": {
+    "title": "Sat Social Doubles",
+    "starts_at": "2027-01-16T10:00:00Z",
+    "format": "MD"
+  },
+  "players": [
+    { "name": "Kasia Nowak", "short": "Kasia", "guest": false },
+    { "name": "Hugo Dahl", "short": "Hugo", "guest": true },
+    { "name": "Lena Pruitt", "short": "Lena", "guest": true }
+  ]
+}
