@@ -4,6 +4,8 @@ import ConfigPanel from "../components/ConfigPanel";
 import RosterTable from "../components/RosterTable";
 import DownloadCSV from "../components/DownloadCSV";
 import ModalDialog from "../components/ModalDialog";
+import ClubImportSheet from "../components/ClubImportSheet";
+import ClubImportBanner from "../components/ClubImportBanner";
 import { appCopy } from "../content/uiCopy";
 
 function KnockoutDuplicateDialog({ violations, onDismiss }) {
@@ -195,6 +197,8 @@ export default function PlannerRoute({ planner, navigateToView, sessionLoading, 
         violations={duplicateKnockoutViolations}
         onDismiss={dismissDuplicateKnockoutViolations}
       />
+      <ClubImportSheet {...planner.clubImport} />
+      <ClubImportBanner error={planner.clubImport.error} onDismiss={planner.clubImport.dismissError} />
 
       <section className="rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-600 via-indigo-500 to-sky-500 p-5 text-white shadow-sm sm:p-6">
         <div className="flex flex-col gap-5">

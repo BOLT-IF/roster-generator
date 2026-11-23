@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { generateRoster, revalidateRoster } from "../api";
 import { appCopy } from "../content/uiCopy";
 import {
+  CLUB_IMPORT_COPY,
+  getLocationWithoutImport,
+  matchImportedPlayers,
+  readClubImportFromLocation,
+} from "../lib/clubImport";
+import {
   DUPLICATE_KNOCKOUT_VIOLATION_PREFIX,
   PLANNER_STORAGE_KEY,
   createSessionName,
@@ -19,7 +25,13 @@ import {
   writeStorage,
 } from "./appStateUtils";
 
-export default function usePlannerState({ confirmAction, directoryPlayers, directoryLoaded = true, navigateToPlanner }) {
+export default function usePlannerState({
+  confirmAction,
+  directoryPlayers,
+  directoryLoaded = true,
+  navigateToPlanner,
+  onCreatePlayer,
+}) {
   const plannerState = useRef(sanitizePlannerState(readStorage(PLANNER_STORAGE_KEY, null))).current;
   const reviewStepRef = useRef(null);
 
@@ -360,7 +372,21 @@ export default function usePlannerState({ confirmAction, directoryPlayers, direc
   });
   const canContinueFromSettings = config.num_courts >= 1 && !configIssue;
 
+  const clubImport = useClubImportState({
+    confirmAction,
+    directoryPlayers,
+    directoryLoaded,
+    hasUnsavedDraft: selectedPlayerIds.length > 0 || fixedPairIds.length > 0 || Boolean(roster),
+    applyImportedSelection: ({ playerIds }) => {
+      setSelectedPlayerIds(playerIds);
+      setFixedPairIds([]);
+      setPlannerStep(1);
+    },
+    onCreatePlayer,
+  });
+
   return {
+    clubImport,
     plannerStep,
     setPlannerStep,
     selectedPlayerIds,
@@ -402,5 +428,100 @@ export default function usePlannerState({ confirmAction, directoryPlayers, direc
     handleRosterRoundTap,
     resetAfterSessionStart,
     removeDeletedPlayer,
+  };
+}
+
+// Club import sheet state for /planner#import=… (roster-import/v1). Lives here
+// so the planner hook stays the single owner of draft state. The link is read
+// once per page load, and its fragment is cleared straight away so a reload
+// never imports again. Nothing is written until the organizer confirms.
+function useClubImportState({
+  confirmAction,
+  directoryPlayers,
+  directoryLoaded,
+  hasUnsavedDraft,
+  applyImportedSelection,
+  onCreatePlayer,
+}) {
+  const [sheetPayload, setSheetPayload] = useState(null);
+  const [error, setError] = useState(null);
+  const [addingIndexes, setAddingIndexes] = useState(() => new Set());
+  const [addErrors, setAddErrors] = useState({});
+  const [addedIndexes, setAddedIndexes] = useState(() => new Set());
+
+  // Reads #import= on load and whenever the hash changes (a club link opened in
+  // a tab that already has the planner), then clears the fragment so a reload
+  // never imports again.
+  useEffect(() => {
+    function readLink() {
+      const link = readClubImportFromLocation(window.location);
+      if (!link) return;
+      setSheetPayload(link.payload);
+      setError(link.error);
+      setAddErrors({});
+      window.history.replaceState(window.history.state, "", getLocationWithoutImport(window.location));
+    }
+    readLink();
+    window.addEventListener("hashchange", readLink);
+    return () => window.removeEventListener("hashchange", readLink);
+  }, []);
+
+  const rows = sheetPayload && directoryLoaded
+    ? matchImportedPlayers(sheetPayload.players, directoryPlayers)
+    : [];
+
+  async function importSelection() {
+    if (!sheetPayload) return;
+    if (hasUnsavedDraft) {
+      const shouldReplace = await confirmAction(CLUB_IMPORT_COPY.replaceConfirm, {
+        confirmLabel: "Replace draft",
+      });
+      if (!shouldReplace) return;
+    }
+
+    const playerIds = [...new Set(rows.filter((row) => row.match).map((row) => row.match.playerId))];
+    applyImportedSelection({ playerIds, event: sheetPayload.event });
+    setSheetPayload(null);
+    setAddErrors({});
+  }
+
+  async function addToDirectory(row) {
+    if (!onCreatePlayer || addingIndexes.has(row.index)) return;
+    setAddingIndexes((current) => new Set(current).add(row.index));
+    setAddErrors((current) => ({ ...current, [row.index]: null }));
+    try {
+      const created = await onCreatePlayer({ full_name: row.name, short_name: row.shortName });
+      if (!created) {
+        setAddErrors((current) => ({ ...current, [row.index]: CLUB_IMPORT_COPY.addFailed }));
+        return;
+      }
+      setAddedIndexes((current) => new Set(current).add(row.index));
+    } finally {
+      setAddingIndexes((current) => {
+        const next = new Set(current);
+        next.delete(row.index);
+        return next;
+      });
+    }
+  }
+
+  return {
+    sheetOpen: Boolean(sheetPayload),
+    sheetEvent: sheetPayload?.event || null,
+    rows: rows.map((row) => ({
+      ...row,
+      added: addedIndexes.has(row.index),
+      adding: addingIndexes.has(row.index),
+      addError: addErrors[row.index] || null,
+    })),
+    directoryLoaded,
+    error,
+    dismissError: () => setError(null),
+    closeSheet: () => {
+      setSheetPayload(null);
+      setAddErrors({});
+    },
+    importSelection,
+    addToDirectory,
   };
 }

@@ -62,7 +62,7 @@ test.describe("club import (roster-import/v1)", () => {
     await expect(sheet.getByText(`Tove Sandqvist ${suffix}`)).toBeVisible();
   });
 
-  test("golden guests fixture labels guests and offers Add to directory for unmatched names", async ({ page, request }, testInfo) => {
+  test("golden guests fixture labels guests and offers Add to directory for unmatched names", async ({ page }, testInfo) => {
     const suffix = testInfo.project.name;
     const payload = fixtureForSuffix(loadFixture("golden/guests.json"), suffix);
     await page.goto(importUrl(encodeFragment(payload)));
@@ -71,7 +71,8 @@ test.describe("club import (roster-import/v1)", () => {
     await expect(sheet).toBeVisible();
     const hugoRow = sheet.locator("li").filter({ hasText: `Hugo Dahl ${suffix}` });
     await expect(hugoRow.getByText("Guest", { exact: true })).toBeVisible();
-    await expect(hugoRow.getByRole("button", { name: "Add to directory" })).toHaveCount(0);
+    // Unmatched guests are labelled and can still be added to the directory.
+    await expect(hugoRow.getByRole("button", { name: "Add to directory" })).toBeVisible();
     const kasiaRow = sheet.locator("li").filter({ hasText: `Kasia Nowak ${suffix}` });
     await expect(kasiaRow.getByRole("button", { name: "Add to directory" })).toBeVisible();
   });
@@ -90,7 +91,9 @@ test.describe("club import (roster-import/v1)", () => {
     await page.getByRole("button", { name: "Close" }).click();
     await expect(sheet).toBeHidden();
 
+    // Fresh navigation: a hash-only change on the same page would not re-read the link.
     const byFull = fixtureForSuffix(loadFixture("golden/full-name-match.json"), suffix);
+    await page.goto("about:blank");
     await page.goto(importUrl(encodeFragment(byFull)));
     const sheet2 = page.getByRole("dialog", { name: SHEET_HEADING });
     await expect(sheet2).toBeVisible();
@@ -115,7 +118,7 @@ test.describe("club import (roster-import/v1)", () => {
   test("unknown version shows a friendly banner and the planner still works", async ({ page }) => {
     const payload = loadFixture("invalid/unknown-version.json");
     await page.goto(importUrl(encodeFragment(payload)));
-    await expect(page.getByText(/newer version of the import link/i)).toBeVisible();
+    await expect(page.getByText(/newer version of the roster app/i)).toBeVisible();
     await expect(page.getByRole("dialog", { name: SHEET_HEADING })).toHaveCount(0);
     await expect(page.getByPlaceholder("Search players...")).toBeVisible();
   });
@@ -192,9 +195,9 @@ test.describe("club import (roster-import/v1)", () => {
     const confirm = page.getByRole("dialog", { name: /are you sure/i });
     await expect(confirm).toBeVisible();
 
-    // Cancel keeps the draft and leaves the sheet open.
+    // Cancel keeps the draft (one selected player) and leaves the sheet open.
     await confirm.getByRole("button", { name: "Cancel" }).click();
     await expect(sheet).toBeVisible();
-    await expect(page.getByText(`Elin Varga ${suffix}`, { exact: true })).toBeVisible();
+    await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
   });
 });
